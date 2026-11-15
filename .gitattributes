@@ -1,0 +1,6 @@
+native/LibRaw/** -whitespace linguist-vendored
+app/src/main/assets/LibRaw* -whitespace
+*.png binary
+*.so binary
+*.jar binary
+docs/screenshots/** linguist-generated

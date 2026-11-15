@@ -1,0 +1,20 @@
+# Local build products, credentials and machine state
+.gradle/
+build/
+app/build/
+dist/
+downloads/
+.private/
+local.properties
+*.log
+*.keystore
+*.jks
+*.pem
+.env*
+__pycache__/
+*.pyc
+WORK-STATUS.md
+VERIFICATION.md
+MEDIA-DESIGN.md
+# Bundled native decoder is an intentional release input, with corresponding source.
+!app/src/main/jniLibs/arm64-v8a/libcameraraw.so

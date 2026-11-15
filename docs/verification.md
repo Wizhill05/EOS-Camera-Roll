@@ -1,0 +1,14 @@
+# Verification for 0.6.0
+
+The user reported the previous Camera roll app working well on the physical EOS R50 V. This redesign has not been installed or driven on that physical handset by the build environment.
+
+The current checks exercise:
+
+- Fourteen Android API 34 Robolectric workflows: native dark/light masonry screens with real proportioned bitmap tiles; full-resolution JPEG viewer and ratings; selected/save state; persistent ratings and filtering; read-only Lightroom original staging and traversal/mode rejection; restored camera libraries; unreachable refresh preserving cached photos; connected empty cards; portrait orientation from an original whose thumbnail omits EXIF; offline loading of that normalized thumbnail without camera requests; foreign-origin snapshot rejection; exact document-provider original bytes; completion/failure notifications; cleanup of failed writes; creation of card-copy directories; duplicate-save receipt reuse.
+- Twenty host protocol checks, seven link-parser checks, and forty-three media/orientation/error checks. Includes paginated CR3/XFVC coverage, >4 GiB video offsets, original-byte/hash fidelity, cancellation, bounded original header probing when Range is ignored, EXIF/CMT1 orientation parsing, double-rotation prevention and distinct network/account/device error classes.
+- Android release assembly and lint. Lint warnings remain for English-only strings, RTL alignment, platform ExifInterface, explicit durable preference commits, target API age and manifest attributes.
+- Signature compatibility with the earlier app. Certificate SHA-256: `4f6d16a083d3fafbf827b2f5de1461eb0de63b28a77934f30d82cd8cddcb8c80`.
+
+Screenshots are software renders of native Android views under Robolectric. They do not prove handset GPU, system file-provider, video-codec or Adobe app behavior. The photo fixture derives from the public-domain EOS R50 V RAW at https://raw.pixls.us/getfile.php/8403/nice/Canon%20-%20EOS%20R50%20V%20-%20RAW%20%283%3A2%29.CR3. Published source hash: `955ff98710505498ce7f98cbcc5875793ef2d6941b3b5692ed3baf2817ee7c9f`. It was rendered at 6048 × 4020 using the pinned LibRaw source, then cropped into test-only thumbnail variations. If that sample is unavailable during a clean test build, the layout test uses generated bitmap fixtures instead. Test photos are not bundled as user media in the app.
+
+Still requires physical-device checking: this gallery's touch/scroll behavior; orientation on the user's own camera files; camera reconnection through the live hotspot; background service behavior under the phone vendor; ARM64 RAW memory/performance; video codecs and seeking; actual Lightroom import/cleanup. A fixture-based portrait test is not evidence that the user's exact files have been examined.
