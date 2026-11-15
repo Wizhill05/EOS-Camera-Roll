@@ -10,7 +10,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.content.res.ColorStateList;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.GridLayoutManager;
-import android.media.*;
 import android.net.*;
 import android.os.*;
 import android.provider.Settings;
@@ -43,9 +42,6 @@ public final class GalleryActivity extends Activity {
     private long seenCompletion;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService catalogWorker=Executors.newSingleThreadExecutor();
-    private final ExecutorService viewerWorker=Executors.newSingleThreadExecutor();
-    private final ExecutorService videoWorker=Executors.newSingleThreadExecutor();
-    private static final ExecutorService playerCleanup=Executors.newCachedThreadPool(task->{Thread thread=new Thread(task,"video-cleanup");thread.setDaemon(true);return thread;});
     private final List<MediaItem> all=new ArrayList<>(),visible=new ArrayList<>();
     private final Set<MediaItem> selected=new LinkedHashSet<>();
     private CameraSession session;
@@ -62,36 +58,14 @@ public final class GalleryActivity extends Activity {
     private Spinner folders;
     private TextView subtitle,empty,countText,selectionText,transferText,viewerTitle,viewerDetail,playbackText;
     private ProgressBar scanProgress,transferProgress;
-    private Button saveSelection,cancelTransfer,play;
+    private Button saveSelection,cancelTransfer;
     private final List<Button> filters=new ArrayList<>();
     private List<MediaItem> viewingItems=Collections.emptyList();
     private MediaItem viewing;
     private int viewingIndex;
     private ZoomPhotoView photo;
-    private TextureView texture;
-    private MediaPlayer player;
-    private volatile RemoteMediaFile remote;
-    private boolean prepared,playbackStarting,videoDownloadRequired,videoLocalFailed,remoteRendered;
-    private String pendingPlayKey="";
-    private long videoProgressAt;
-    private int lastVideoPosition;
-    private int resumePosition;
-    private volatile int playbackGeneration;
-    private SeekBar seek;
-    private Surface surface;
-    private final Runnable playbackTick=new Runnable(){@Override public void run(){
-        if(viewer==null||destroyed)return;
-        boolean running=playbackStarting;
-        if(prepared&&player!=null)try{
-            int position=player.getCurrentPosition();running=player.isPlaying();
-            if(!seek.isPressed())seek.setProgress(position);playbackText.setText(time(position)+" / "+time(player.getDuration()));
-            if(remote!=null&&remoteRendered&&running&&position!=lastVideoPosition){lastVideoPosition=position;videoProgressAt=SystemClock.elapsedRealtime();}
-        }catch(IllegalStateException error){playbackFailure("Playback stopped. Download & play or open the saved video in another player.");running=false;}
-        if(remote!=null&&running&&SystemClock.elapsedRealtime()-videoProgressAt>12000)playbackFailure("Camera playback stalled. Download & play for reliable playback.");
-        main.postDelayed(this,500);
-    }};
+    private boolean previewInterrupted;
     private List<MediaItem> pendingItems=Collections.emptyList();
-    private boolean pendingTree;
     private final Runnable transferObserver=()->{if(!destroyed)updateTransfer();};
 
     @Override public void onCreate(Bundle state){
@@ -179,7 +153,7 @@ public final class GalleryActivity extends Activity {
     }
     private EditText input(LinearLayout parent,String text,boolean password){TextView label=label(text,13,MUTED,false);parent.addView(label);EditText input=new EditText(this);input.setSingleLine(true);input.setTextSize(16);input.setTextColor(INK);input.setInputType(InputType.TYPE_CLASS_TEXT|(password?InputType.TYPE_TEXT_VARIATION_PASSWORD:InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));input.setSaveEnabled(!password);input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);input.setPadding(dp(10),0,dp(10),0);input.setBackground(background(SURFACE,0xffcbd4e1,8));int id=View.generateViewId();input.setId(id);label.setLabelFor(id);LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,dp(52));p.topMargin=dp(5);p.bottomMargin=dp(10);parent.addView(input,p);return input;}
 
-    private GalleryImages createImages(){return new GalleryImages(this,session,(String key)->{if(!destroyed&&viewer==null&&adapter!=null)adapter.thumbnailChanged(key);});}
+    private GalleryImages createImages(){return new GalleryImages(this,session,(String key)->{if(!destroyed&&viewer==null&&adapter!=null)adapter.thumbnailChanged(key);},failure->{if(!destroyed){cameraVerified=false;issue=failure;libraryStatus=failure.title+" · Refresh to reconnect";applyFilters();}});}
     private Network savedRoute(){
         if(!getSharedPreferences("gallery",0).getString("route","auto").equals("wifi"))return null;
         ConnectivityManager manager=getSystemService(ConnectivityManager.class);for(Network network:manager.getAllNetworks()){NetworkCapabilities caps=manager.getNetworkCapabilities(network);if(caps!=null&&caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)&&!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return network;}return null;
@@ -197,7 +171,7 @@ public final class GalleryActivity extends Activity {
     }
     private void refreshLibrary(){
         if(scanning||TransferService.busy){Toast.makeText(this,"Wait for the current operation to finish",Toast.LENGTH_SHORT).show();return;}
-        stopPlayer();if(images!=null)images.cancelPreview();if(session!=null)session.cancelRequests();
+        if(images!=null)images.cancelPreview();
         if(session==null){String url=getSharedPreferences("gallery",0).getString("url","");if(url.isEmpty()){connectionDialog();return;}try{session=new CameraSession(CameraHttp.url(url),savedRoute(),"","",this::log);images=createImages();images.networkEnabled=false;}catch(IOException invalid){connectionDialog();return;}}
         if(getSharedPreferences("gallery",0).getBoolean("accountRequired",false)&&session.user.isEmpty()){connectionDialog();return;}
         if(getSharedPreferences("gallery",0).getString("route","auto").equals("wifi")&&savedRoute()==null){issue=new LibraryIssue("Camera Wi-Fi is disconnected","Join the camera's Wi-Fi network, then refresh. Or open connection settings to use your phone hotspot.");libraryStatus=issue.title;emptyTitle=issue.title;emptyDetail=issue.detail;applyFilters();return;}
@@ -236,12 +210,7 @@ public final class GalleryActivity extends Activity {
         String text=TransferService.summary;boolean active=TransferService.busy;transferBar.setVisibility(active?View.VISIBLE:View.GONE);transferText.setText(text);cancelTransfer.setVisibility(active?View.VISIBLE:View.GONE);transferProgress.setIndeterminate(TransferService.percent<0);transferProgress.setProgress(Math.max(0,TransferService.percent));
         if(viewer!=null&&viewerTransferProgress!=null){viewerTransferText.setText(text);viewerTransferText.setVisibility(active?View.VISIBLE:View.GONE);viewerTransferProgress.setVisibility(active?View.VISIBLE:View.GONE);viewerTransferProgress.setIndeterminate(TransferService.percent<0);viewerTransferProgress.setProgress(Math.max(0,TransferService.percent));updateViewerSaved();}
         if(images!=null)images.setPaused(viewer!=null||active);updateSelection();
-        if(!active){if(adapter!=null)adapter.notifyDataSetChanged();long done=getSharedPreferences("gallery",0).getLong("completion",0);if(resumed&&done>seenCompletion){seenCompletion=done;Toast.makeText(this,getSharedPreferences("gallery",0).getString("lastTransfer","Transfer finished"),Toast.LENGTH_LONG).show();}openPendingLightroom();
-            if(resumed&&!pendingPlayKey.isEmpty()){
-                if(viewer!=null&&viewing!=null&&viewing.video&&pendingPlayKey.equals(session.key(viewing))&&states.saved(pendingPlayKey)){
-                    pendingPlayKey="";startPlayback(viewerGeneration,viewing);
-                }else if(!pendingTree&&pendingItems.isEmpty())pendingPlayKey="";
-            }
+        if(!active){if(resumed&&previewInterrupted&&viewing!=null&&images!=null)loadViewerPreview(viewing,viewerGeneration);if(adapter!=null)adapter.notifyDataSetChanged();long done=getSharedPreferences("gallery",0).getLong("completion",0);if(resumed&&done>seenCompletion){seenCompletion=done;Toast.makeText(this,getSharedPreferences("gallery",0).getString("lastTransfer","Transfer finished"),Toast.LENGTH_LONG).show();}openPendingLightroom();
         }
     }
     private void chooseRatingFilter(){sheet("Minimum rating",new String[]{"All ratings","1 star and above","2 stars and above","3 stars and above","4 stars and above","5 stars"},index->{minimumRating=index;ratingFilter.setText(index==0?"All ratings":index+" stars and above");applyFilters();});}
@@ -266,7 +235,7 @@ public final class GalleryActivity extends Activity {
         @Override public Holder onCreateViewHolder(ViewGroup parent,int type){MediaCell cell=new MediaCell();RecyclerView.LayoutParams params=new RecyclerView.LayoutParams(-1,-2);params.setMargins(dp(5),dp(5),dp(5),dp(5));cell.setLayoutParams(params);return new Holder(cell);}
         @Override public void onBindViewHolder(Holder holder,int position){
             MediaItem item=visible.get(position);MediaCell cell=holder.cell;String key=session.key(item);
-            int rating=states.rating(key);boolean saved=states.saved(key),chosen=selected.contains(item);cell.name.setText(item.name);cell.name.setVisibility(showNames?View.VISIBLE:View.GONE);cell.badge.setText(item.video?"▶":item.raw()?"RAW":"");cell.badge.setVisibility(item.video||item.raw()?View.VISIBLE:View.GONE);cell.saved.setVisibility(saved?View.VISIBLE:View.GONE);cell.stars.setText("★ "+rating);cell.stars.setVisibility(rating>0?View.VISIBLE:View.GONE);cell.check.setText("✓");cell.check.setVisibility(chosen?View.VISIBLE:View.GONE);cell.setForeground(chosen?background(0x26d92b35,0xffff777d,6):null);cell.setContentDescription(item.name+", "+(item.video?"video":item.raw()?"RAW photo":"photo")+(saved?", saved":"")+(rating>0?", "+rating+" stars":"")+(chosen?", selected":""));cell.setOnClickListener(v->{int index=holder.getBindingAdapterPosition();if(index==RecyclerView.NO_POSITION)return;if(!selected.isEmpty())toggle(visible.get(index));else{viewingItems=new ArrayList<>(visible);openViewer(index);}});cell.setOnLongClickListener(v->{int index=holder.getBindingAdapterPosition();if(index!=RecyclerView.NO_POSITION)toggle(visible.get(index));return true;});if(images!=null)images.thumbnail(item,cell.image);
+            int rating=states.rating(key);boolean saved=states.saved(key),chosen=selected.contains(item);cell.name.setText(item.name);cell.name.setVisibility(showNames?View.VISIBLE:View.GONE);cell.badge.setText(item.video?item.extension:item.raw()?"RAW":"");cell.badge.setVisibility(item.video||item.raw()?View.VISIBLE:View.GONE);cell.saved.setVisibility(saved?View.VISIBLE:View.GONE);cell.stars.setText("★ "+rating);cell.stars.setVisibility(rating>0?View.VISIBLE:View.GONE);cell.check.setText("✓");cell.check.setVisibility(chosen?View.VISIBLE:View.GONE);cell.setForeground(chosen?background(0x26d92b35,0xffff777d,6):null);cell.setContentDescription(item.name+", "+(item.video?"video":item.raw()?"RAW photo":"photo")+(saved?", saved":"")+(rating>0?", "+rating+" stars":"")+(chosen?", selected":""));cell.setOnClickListener(v->{int index=holder.getBindingAdapterPosition();if(index==RecyclerView.NO_POSITION)return;if(!selected.isEmpty())toggle(visible.get(index));else{viewingItems=new ArrayList<>(visible);openViewer(index);}});cell.setOnLongClickListener(v->{int index=holder.getBindingAdapterPosition();if(index!=RecyclerView.NO_POSITION)toggle(visible.get(index));return true;});if(images!=null)images.thumbnail(item,cell.image);
         }
         void retryVisible(){if(images==null||viewer!=null||scanning||TransferService.busy)return;for(int i=0;i<grid.getChildCount();i++){View child=grid.getChildAt(i);if(!(child instanceof MediaCell))continue;MediaCell cell=(MediaCell)child;int position=grid.getChildAdapterPosition(child);if(cell.image.getDrawable()==null&&position>=0&&position<visible.size())images.thumbnail(visible.get(position),cell.image);}}
         void thumbnailChanged(String key){Runnable update=()->{Integer position=positions.get(key);if(position!=null&&position<visible.size())notifyItemChanged(position);retryVisible();};if(grid.isComputingLayout())grid.post(update);else update.run();}
@@ -282,22 +251,13 @@ public final class GalleryActivity extends Activity {
     private TextView overlay(String text,int size,int color){TextView label=label(text,size,color,true);label.setGravity(Gravity.CENTER);label.setPadding(dp(7),dp(3),dp(7),dp(3));label.setBackground(background(0xbb121215,0,14));return label;}
 
     private void openViewer(int index){
-        closeViewer();videoDownloadRequired=false;videoLocalFailed=false;if(index<0||index>=viewingItems.size())return;resumePosition=0;viewingIndex=index;viewing=viewingItems.get(index);int token=++viewerGeneration;MediaItem item=viewing;CameraSession current=session;
+        closeViewer();if(index<0||index>=viewingItems.size())return;viewingIndex=index;viewing=viewingItems.get(index);int token=++viewerGeneration;MediaItem item=viewing;CameraSession current=session;
         if(images!=null)images.setPaused(true);viewer=new FrameLayout(this);viewer.setBackgroundColor(PAPER);root.addView(viewer,new FrameLayout.LayoutParams(-1,-1));LinearLayout content=column();viewer.addView(content,new FrameLayout.LayoutParams(-1,-1));
         LinearLayout top=row();top.setPadding(dp(12),dp(12),dp(12),dp(8));addIcon(top,"back","Close viewer",this::closeViewer);viewerTitle=label(item.name,14,INK,true);viewerTitle.setMaxLines(2);viewerTitle.setPadding(dp(12),0,0,0);top.addView(viewerTitle,new LinearLayout.LayoutParams(0,-2,1));addIcon(top,"info","File information",()->message(viewerDetail.getText().toString()));content.addView(top);
-        stage=new FrameLayout(this);content.addView(stage,new LinearLayout.LayoutParams(-1,0,1));stage.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob)->{if(prepared&&player!=null&&(r-l!=or-ol||b-t!=ob-ot))try{fitVideo(player.getVideoWidth(),player.getVideoHeight());}catch(IllegalStateException ignored){}});photo=new ZoomPhotoView(this);stage.addView(photo,new FrameLayout.LayoutParams(-1,-1));
-        playbackText=label(item.video?"Ready to stream from camera":"Loading preview…",12,MUTED,false);playbackText.setGravity(Gravity.CENTER);playbackText.setPadding(dp(18),dp(6),dp(18),dp(6));content.addView(playbackText);
+        stage=new FrameLayout(this);content.addView(stage,new LinearLayout.LayoutParams(-1,0,1));photo=new ZoomPhotoView(this);stage.addView(photo,new FrameLayout.LayoutParams(-1,-1));
+        playbackText=label(item.video?"Video":"Loading preview…",12,MUTED,false);playbackText.setGravity(Gravity.CENTER);playbackText.setPadding(dp(18),dp(6),dp(18),dp(6));content.addView(playbackText);
         viewerDetail=label(item.extension+" • "+item.folder,12,MUTED,false);viewerDetail.setGravity(Gravity.CENTER);viewerDetail.setPadding(dp(16),0,dp(16),dp(8));viewerDetail.setVisibility(View.GONE);content.addView(viewerDetail);
         previewProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);previewProgress.setIndeterminate(true);previewProgress.setVisibility(item.video?View.GONE:View.VISIBLE);content.addView(previewProgress,new LinearLayout.LayoutParams(-1,dp(3)));
-        if(item.video){
-            seek=new SeekBar(this);seek.setEnabled(false);content.addView(seek,new LinearLayout.LayoutParams(-1,dp(40)));seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){@Override public void onProgressChanged(SeekBar b,int p,boolean fromUser){}@Override public void onStartTrackingTouch(SeekBar b){}@Override public void onStopTrackingTouch(SeekBar b){if(prepared&&player!=null)player.seekTo(b.getProgress());}});
-            play=button("Play video",true,()->{
-                if(prepared&&player!=null){if(player.isPlaying()){player.pause();play.setText("Play");getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}else{videoProgressAt=SystemClock.elapsedRealtime();player.start();play.setText("Pause");getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}}
-                else if(videoLocalFailed)openSavedVideo(item);
-                else if(videoDownloadRequired&&states.savedUri(session.key(item)).isEmpty()){if(canDownload()){pendingPlayKey=session.key(item);saveOne(item);}}
-                else startPlayback(token,item);
-            });LinearLayout controls=row();controls.setGravity(Gravity.CENTER);controls.addView(play,new LinearLayout.LayoutParams(dp(180),dp(48)));content.addView(controls);
-        }
         LinearLayout ratings=row();ratings.setGravity(Gravity.CENTER);ratingButtons.clear();int rating=states.rating(current.key(item));
         for(int i=1;i<=5;i++){final int stars=i;Button rate=button(i<=rating?"★":"☆",false,()->{int now=states.rating(current.key(item));states.rate(current.key(item),now==stars?0:stars);updateRatingButtons();});rate.setBackgroundColor(Color.TRANSPARENT);rate.setTextSize(25);rate.setTextColor(dark?0xffe8bd66:0xff875900);rate.setContentDescription("Rate "+i+" stars");ratingButtons.add(rate);ratings.addView(rate,new LinearLayout.LayoutParams(dp(48),dp(48)));}content.addView(ratings);
         viewerTransferText=label("",12,INK,false);viewerTransferText.setPadding(dp(16),dp(6),dp(16),dp(6));viewerTransferText.setVisibility(View.GONE);content.addView(viewerTransferText);viewerTransferProgress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);viewerTransferProgress.setVisibility(View.GONE);content.addView(viewerTransferProgress,new LinearLayout.LayoutParams(-1,dp(3)));
@@ -305,98 +265,35 @@ public final class GalleryActivity extends Activity {
         viewerSave=button("Save",true,()->saveOne(item));LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(0,dp(48),1);saveParams.setMargins(dp(8),0,dp(8),0);bottom.addView(viewerSave,saveParams);
         if(!item.video){Button lr=button("Lr",false,()->sendLightroom(item));lr.setContentDescription("Edit original in Lightroom");bottom.addView(lr,new LinearLayout.LayoutParams(dp(56),dp(48)));}
         ImageButton next=icon("next","Next file",()->openViewer(viewingIndex+1));next.setEnabled(index<viewingItems.size()-1);next.setAlpha(index<viewingItems.size()-1?1f:.35f);LinearLayout.LayoutParams nextParams=new LinearLayout.LayoutParams(dp(48),dp(48));nextParams.leftMargin=dp(8);bottom.addView(next,nextParams);content.addView(bottom);updateViewerSaved();
+        loadViewerPreview(item,token);updateTransfer();
+    }
+    private void loadViewerPreview(MediaItem item,int token){
+        previewInterrupted=false;
         images.preview(item,bitmap->{if(viewer!=null&&token==viewerGeneration)photo.setImageBitmap(bitmap);},note->{if(viewer!=null&&token==viewerGeneration){playbackText.setText(note);if(note.startsWith("Rendering")){previewProgress.setVisibility(View.VISIBLE);previewProgress.setIndeterminate(true);}}},(bytes,total)->{if(viewer!=null&&token==viewerGeneration){previewProgress.setVisibility(bytes<0?View.GONE:View.VISIBLE);previewProgress.setIndeterminate(total<=0);previewProgress.setProgress(total>0?(int)(bytes*100/total):0);}});
-        updateTransfer();
-        if(!item.video)viewerWorker.execute(()->{if(destroyed||token!=viewerGeneration)return;try{Object response=current.json(MediaCatalog.query(item.url,"kind=info"));if(response instanceof JSONObject){JSONObject info=(JSONObject)response;long bytes=info.optLong("filesize",-1);String date=info.optString("lastmodifieddate","");main.post(()->{if(viewer!=null&&token==viewerGeneration)viewerDetail.setText(item.extension+(bytes>=0?" • "+TransferService.human(bytes):"")+"\n"+item.folder+(date.isEmpty()?"":" • "+date));});}}catch(Exception e){log("Media information unavailable: "+e.getMessage());}});
-        main.post(playbackTick);
     }
-    private void startPlayback(int token,MediaItem item){
-        if(playbackStarting)return;
-        String saved=states.savedUri(session.key(item));
-        if(saved.isEmpty()){
-            if(!cameraVerified){message("Refresh the library to reconnect before streaming this video.");return;}
-            if(TransferService.busy){message("Wait for the original download to finish before streaming.");return;}
-        }
-        if(images!=null)images.cancelPreview();session.cancelRequests();
-        final int playbackToken=++playbackGeneration;playbackStarting=true;remoteRendered=false;
-        videoProgressAt=SystemClock.elapsedRealtime();lastVideoPosition=-1;
-        play.setEnabled(false);playbackText.setText(saved.isEmpty()?"Opening camera stream…":"Opening saved video…");
-        texture=new TextureView(this);stage.addView(texture,new FrameLayout.LayoutParams(-1,-1,Gravity.CENTER));
-        texture.setSurfaceTextureListener(new TextureView.SurfaceTextureListener(){
-            @Override public void onSurfaceTextureAvailable(SurfaceTexture t,int w,int h){if(playbackToken==playbackGeneration)prepareVideo(token,playbackToken,item,t);}
-            @Override public void onSurfaceTextureSizeChanged(SurfaceTexture t,int w,int h){}
-            @Override public boolean onSurfaceTextureDestroyed(SurfaceTexture t){
-                if(playbackToken==playbackGeneration){int lost=++playbackGeneration;RemoteMediaFile source=remote;if(source!=null)source.close();main.post(()->{if(lost==playbackGeneration){stopPlayer();if(viewer!=null)playbackText.setText("Video display closed. Tap Play video to continue.");}});}
-                return true;
-            }
-            @Override public void onSurfaceTextureUpdated(SurfaceTexture t){}
-        });
-    }
-    private void prepareVideo(int token,int playbackToken,MediaItem item,SurfaceTexture surfaceTexture){
-        CameraSession current=session;String saved=states.savedUri(current.key(item));boolean local=!saved.isEmpty();
-        RemoteMediaFile source=local?null:new RemoteMediaFile(item.url,current.opener(),current.user,current.password,this::log);remote=source;
-        videoWorker.execute(()->{
-            try{
-                if(destroyed||token!=viewerGeneration||playbackToken!=playbackGeneration){if(source!=null)source.close();return;}
-                if(source!=null)source.prepare();
-                main.post(()->{
-                    if(destroyed||viewer==null||token!=viewerGeneration||playbackToken!=playbackGeneration){if(source!=null)source.close();return;}
-                    try{
-                        player=new MediaPlayer();surface=new Surface(surfaceTexture);player.setSurface(surface);player.setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build());
-                        if(local)player.setDataSource(this,Uri.parse(saved));
-                        else player.setDataSource(new MediaDataSource(){@Override public int readAt(long position,byte[] buffer,int offset,int size)throws IOException{return source.readAt(position,buffer,offset,size);}@Override public long getSize(){return source.size();}@Override public void close(){source.close();}});
-                        player.setOnPreparedListener(mp->{if(token!=viewerGeneration||playbackToken!=playbackGeneration)return;prepared=true;playbackStarting=false;play.setEnabled(true);seek.setEnabled(true);seek.setMax(mp.getDuration());if(resumePosition>0){mp.seekTo(resumePosition);resumePosition=0;}if(resumed){mp.start();play.setText("Pause");getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);}else play.setText("Play");});
-                        player.setOnInfoListener((mp,what,extra)->{if(playbackToken!=playbackGeneration)return true;if(what==MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START){remoteRendered=true;videoProgressAt=SystemClock.elapsedRealtime();if(source!=null)source.playbackStarted();}return false;});
-                        player.setOnVideoSizeChangedListener((mp,w,h)->{if(token==viewerGeneration&&playbackToken==playbackGeneration)fitVideo(w,h);});
-                        player.setOnCompletionListener(mp->{if(playbackToken!=playbackGeneration)return;stopPlayer();play.setText("Play again");playbackText.setText("Playback finished");});
-                        player.setOnErrorListener((mp,what,extra)->{if(playbackToken!=playbackGeneration)return true;log("VIDEO: MediaPlayer error "+what+" / "+extra);if(local)videoLocalFailed=true;playbackFailure(local?"This phone's player could not open the saved video. Try another video player.":"This video could not be streamed. Download & play instead.");return true;});
-                        player.prepareAsync();
-                    }catch(Exception e){if(local)videoLocalFailed=true;log("VIDEO: "+e.getMessage());playbackFailure(local?"Could not open the saved video. Try another player or check that the file is still available.":friendly(e));}
-                });
-            }catch(Exception e){if(source!=null)source.close();log("VIDEO: "+e.getMessage());main.post(()->{if(viewer!=null&&token==viewerGeneration&&playbackToken==playbackGeneration)playbackFailure(friendly(e));});}
-        });
-    }
-    private void fitVideo(int width,int height){if(texture==null||stage==null||width<=0||height<=0||stage.getWidth()==0||stage.getHeight()==0)return;float ratio=Math.min(stage.getWidth()/(float)width,stage.getHeight()/(float)height);texture.setLayoutParams(new FrameLayout.LayoutParams((int)(width*ratio),(int)(height*ratio),Gravity.CENTER));}
-    private void playbackFailure(String message){videoDownloadRequired=true;stopPlayer();playbackText.setText(message);if(play!=null)play.setText(videoLocalFailed?"Open with player":"Download & play");}
-    private void stopPlayer(){
-        playbackGeneration++;prepared=false;playbackStarting=false;
-        RemoteMediaFile source=remote;remote=null;if(source!=null)source.close();
-        MediaPlayer oldPlayer=player;player=null;Surface oldSurface=surface;surface=null;
-        if(oldPlayer!=null||oldSurface!=null)playerCleanup.execute(()->{if(oldPlayer!=null)try{oldPlayer.release();}catch(Exception ignored){}if(oldSurface!=null)oldSurface.release();});
-        if(texture!=null&&stage!=null){stage.removeView(texture);texture=null;}
-        if(seek!=null)seek.setEnabled(false);
-        if(play!=null){play.setText(videoLocalFailed?"Open with player":videoDownloadRequired?"Download & play":"Play video");play.setEnabled(true);}
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-    }
-    private void openSavedVideo(MediaItem item){
-        String saved=states.savedUri(session.key(item));if(saved.isEmpty())return;
-        Uri uri=Uri.parse(saved);Intent intent=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);intent.setClipData(ClipData.newRawUri("Saved video",uri));
-        try{startActivity(Intent.createChooser(intent,"Open saved video"));}catch(ActivityNotFoundException error){message("Install a video player that supports this camera's recording format.");}
-    }
-    private void closeViewer(){pendingPlayKey="";if(viewer!=null&&session!=null&&!TransferService.busy)session.cancelRequests();viewerGeneration++;main.removeCallbacks(playbackTick);stopPlayer();if(viewer!=null){root.removeView(viewer);viewer=null;}viewing=null;texture=null;if(images!=null){images.cancelPreview();images.setPaused(destroyed||!resumed||TransferService.busy);}if(adapter!=null){applyFilters();}if(photo!=null)photo.setImageDrawable(null);photo=null;viewerSave=null;viewerTransferText=null;viewerTransferProgress=null;}
-    private static String time(int millis){int seconds=Math.max(0,millis/1000);return seconds>=3600?String.format(Locale.US,"%d:%02d:%02d",seconds/3600,seconds/60%60,seconds%60):String.format(Locale.US,"%d:%02d",seconds/60,seconds%60);}
+    private void closeViewer(){previewInterrupted=false;viewerGeneration++;if(viewer!=null){root.removeView(viewer);viewer=null;}viewing=null;if(images!=null){images.cancelPreview();images.setPaused(destroyed||!resumed||TransferService.busy);}if(adapter!=null)applyFilters();if(photo!=null)photo.setImageDrawable(null);photo=null;viewerSave=null;viewerTransferText=null;viewerTransferProgress=null;}
 
     private void updateRatingButtons(){if(viewing==null)return;int rating=states.rating(session.key(viewing));for(int i=0;i<ratingButtons.size();i++){ratingButtons.get(i).setText(i<rating?"★":"☆");ratingButtons.get(i).setContentDescription("Rate "+(i+1)+" stars"+(i<rating?", selected":""));}}
     private void updateViewerSaved(){if(viewerSave==null||viewing==null||session==null)return;boolean saved=states.saved(session.key(viewing));viewerSave.setText(saved?"✓ Saved":"Save");viewerSave.setEnabled(!TransferService.busy);}
     private void saveOne(MediaItem item){saveItems(Collections.singletonList(item),false);}
     private void saveSelected(){saveItems(new ArrayList<>(selected),false);}
-    private void saveItems(List<MediaItem> items,boolean newFolder){if(!canDownload()||items.isEmpty())return;stopPlayer();if(images!=null)images.cancelPreview();pendingItems=items;pendingNewFolder=newFolder;String stored=getSharedPreferences("gallery",0).getString("downloadTree","");if(stored.isEmpty())chooseDownloadFolder();else startPending(Uri.parse(stored));}
-    private void chooseDownloadFolder(){pendingTree=true;startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),92);}
+    private void saveItems(List<MediaItem> items,boolean newFolder){if(!canDownload()||items.isEmpty())return;if(images!=null)images.cancelPreview();pendingItems=items;pendingNewFolder=newFolder;String stored=getSharedPreferences("gallery",0).getString("downloadTree","");if(stored.isEmpty())chooseDownloadFolder();else startPending(Uri.parse(stored));}
+    private void chooseDownloadFolder(){startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION),92);}
     private void startPending(Uri destination){
         if(pendingItems.isEmpty())return;
         try{if(images!=null)images.setPaused(true);TransferService.start(this,session,pendingItems,destination,pendingNewFolder,false);selected.clear();pendingItems=Collections.emptyList();updateTransfer();requestNotifications();}
         catch(Exception e){message(friendly(e));updateTransfer();}
     }
-    private void sendLightroom(MediaItem item){if(!canDownload())return;if(!LightroomProvider.installed(this)){message("Install Lightroom on this phone to edit the original.");return;}stopPlayer();images.cancelPreview();try{TransferService.start(this,session,Collections.singletonList(item),null,false,true);updateTransfer();requestNotifications();}catch(Exception e){message(friendly(e));}}
+    private void sendLightroom(MediaItem item){if(!canDownload())return;if(!LightroomProvider.installed(this)){message("Install Lightroom on this phone to edit the original.");return;}images.cancelPreview();try{TransferService.start(this,session,Collections.singletonList(item),null,false,true);updateTransfer();requestNotifications();}catch(Exception e){message(friendly(e));}}
     private void openPendingLightroom(){if(!resumed||TransferService.busy)return;SharedPreferences preferences=getSharedPreferences("gallery",0);String uri=preferences.getString("handoff","");if(uri.isEmpty())return;String key=preferences.getString("handoffKey","");preferences.edit().remove("handoff").commit();try{LightroomProvider.launch(this,Uri.parse(uri),preferences.getString("handoffMime","image/*"));states.markSent(key);}catch(Exception e){message("Could not open Lightroom. Tap Lr to try again.");}}
     private boolean canDownload(){if(session==null){connectionDialog();return false;}if(!cameraVerified){message("Refresh the library to reconnect before saving originals.");return false;}if(scanning){message("Finish reading the card before starting a transfer.");return false;}if(TransferService.busy){message("A transfer is already running.");return false;}return true;}
     private void requestNotifications(){if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},93);}
-    @Override protected void onActivityResult(int code,int result,Intent data){super.onActivityResult(code,result,data);if(code!=92)return;pendingTree=false;if(result!=RESULT_OK||data==null||data.getData()==null){pendingItems=Collections.emptyList();pendingPlayKey="";return;}
+    @Override protected void onActivityResult(int code,int result,Intent data){super.onActivityResult(code,result,data);if(code!=92)return;if(result!=RESULT_OK||data==null||data.getData()==null){pendingItems=Collections.emptyList();return;}
         try{Uri destination=data.getData();int permission=Intent.FLAG_GRANT_WRITE_URI_PERMISSION;if((data.getFlags()&Intent.FLAG_GRANT_WRITE_URI_PERMISSION)==0)throw new SecurityException("Choose a writable folder");if((data.getFlags()&Intent.FLAG_GRANT_READ_URI_PERMISSION)!=0)permission|=Intent.FLAG_GRANT_READ_URI_PERMISSION;getContentResolver().takePersistableUriPermission(destination,permission);getSharedPreferences("gallery",0).edit().putString("downloadTree",destination.toString()).apply();if(pendingItems.isEmpty())Toast.makeText(this,"Download folder set",Toast.LENGTH_SHORT).show();else startPending(destination);}catch(Exception e){message(friendly(e));}
     }
     @Override public void onConfigurationChanged(Configuration configuration){super.onConfigurationChanged(configuration);((GridLayoutManager)grid.getLayoutManager()).setSpanCount(columns());adapter.notifyDataSetChanged();}
     @Override public void onBackPressed(){if(viewer!=null)closeViewer();else if(!selected.isEmpty()){selected.clear();applyFilters();}else super.onBackPressed();}
     @Override protected void onResume(){super.onResume();resumed=true;if(images!=null)images.setPaused(viewer!=null||TransferService.busy);if(transferBar!=null)updateTransfer();}
-    @Override protected void onStop(){resumed=false;if(player!=null&&prepared)try{resumePosition=player.getCurrentPosition();}catch(IllegalStateException ignored){}if(player!=null||remote!=null||playbackStarting){stopPlayer();if(viewer!=null&&viewing!=null&&viewing.video)playbackText.setText("Tap Play video to continue playback.");}if(images!=null)images.setPaused(true);super.onStop();}
-    @Override protected void onDestroy(){destroyed=true;scanCancelled=true;generation++;closeViewer();if(images!=null)images.close();if(session!=null)session.close();catalogWorker.shutdownNow();viewerWorker.shutdownNow();videoWorker.shutdownNow();TransferService.observers.remove(transferObserver);super.onDestroy();}
+    @Override protected void onStop(){resumed=false;previewInterrupted=viewer!=null&&viewing!=null&&!viewing.video&&pendingItems.isEmpty()&&!TransferService.busy;if(images!=null){images.setPaused(true);images.cancelPreview();}if(scanning&&session!=null){scanCancelled=true;session.cancelRequests();}super.onStop();}
+    @Override protected void onDestroy(){destroyed=true;scanCancelled=true;generation++;closeViewer();if(images!=null)images.close();if(session!=null)session.close();catalogWorker.shutdownNow();TransferService.observers.remove(transferObserver);super.onDestroy();}
 }

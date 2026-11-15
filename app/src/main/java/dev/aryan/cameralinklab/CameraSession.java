@@ -29,32 +29,33 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
         CameraHttp client=new CameraHttp(opener(),user,password,log);clients.add(client);
         if(closed){client.close();clients.remove(client);throw new IOException("Camera disconnected");}return client;
     }
-    @Override public synchronized Object json(URL url)throws IOException {
+    @Override public Object json(URL url)throws IOException {
         byte[] data=bytes(url,4*1024*1024);
         try{Object value=new JSONTokener(new String(data,java.nio.charset.StandardCharsets.UTF_8)).nextValue();
             if(!(value instanceof JSONObject)&&!(value instanceof JSONArray))throw new IOException("Unexpected camera response");return value;
         }catch(JSONException e){throw new IOException("Camera returned invalid JSON",e);}
     }
-    synchronized byte[] bytes(URL url,int maximum)throws IOException {
+    byte[] bytes(URL url,int maximum)throws IOException {
         if(!CameraHttp.sameOrigin(root,url))throw new IOException("Invalid camera origin");
-        CameraHttp client=client();
-        try{HttpURLConnection c=client.get(url);try(InputStream in=c.getInputStream()){return CameraHttp.readBounded(in,maximum);}finally{c.disconnect();}}
-        finally{clients.remove(client);client.close();}
+        CameraHttp client=client().timeouts(3000,5000).deadline(12000);
+        try{client.get(url);return client.read(maximum);}
+        finally{try{client.close();}finally{clients.remove(client);}}
     }
     SaveResult save(MediaItem item,OutputStream out,BooleanSupplier cancelled,BiConsumer<Long,Long> progress)throws IOException {
         if(!CameraHttp.sameOrigin(root,item.url))throw new IOException("Invalid camera origin");
+        if(cancelled.getAsBoolean()||closed)throw new IOException("Download cancelled");
         CameraHttp client=client();
         try{
             HttpURLConnection c=client.get(item.url);
-            try(InputStream in=c.getInputStream()){
+            try(InputStream in=client.body()){
                 MessageDigest digest;try{digest=MessageDigest.getInstance("SHA-256");}catch(NoSuchAlgorithmException e){throw new IOException(e);}
                 long expected=c.getContentLengthLong(),count=0,last=0;byte[] buffer=new byte[65536];int n;
                 while((n=in.read(buffer))!=-1){if(cancelled.getAsBoolean()||closed)throw new IOException("Download cancelled");out.write(buffer,0,n);digest.update(buffer,0,n);count+=n;
                     if(System.nanoTime()-last>400_000_000){progress.accept(count,expected);last=System.nanoTime();}}
                 if(expected>=0&&count!=expected)throw new IOException("Download incomplete: "+count+" of "+expected+" bytes");
                 out.flush();progress.accept(count,expected);return new SaveResult(count,CameraHttp.hex(digest.digest()));
-            }finally{c.disconnect();}
-        }finally{clients.remove(client);client.close();}
+            }
+        }finally{try{client.close();}finally{clients.remove(client);}}
     }
     void cancelRequests(){for(CameraHttp c:clients)c.cancel();}
     @Override public void close(){closed=true;cancelRequests();}

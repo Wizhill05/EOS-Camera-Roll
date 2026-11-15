@@ -7,7 +7,7 @@ EOS Camera Roll is an independent Android companion built around Canon's Camera 
 
 ## Gallery
 
-A red-accented gallery uses three columns of square tiles with subtle corners, dark/light/system appearance, and floating Library / Rated / Saved navigation. Folder and star filters are in the filter sheet; copy actions are in the download sheet. The viewer supports original JPEG and RAW zoom, video playback and seeking, local ratings, saving and Lightroom handoff.
+A red-accented gallery uses three columns of square tiles with subtle corners, dark/light/system appearance, and floating Library / Rated / Saved navigation. Folder and star filters are in the filter sheet; copy actions are in the download sheet. The viewer supports original JPEG and RAW zoom, video thumbnails and saving, local ratings, saving and Lightroom handoff.
 
 <table><tr><td><img src="docs/screenshots/gallery-dark.png" width="260" alt="Dark gallery with red controls and a three-column square photo layout"></td><td><img src="docs/screenshots/gallery-light.png" width="260" alt="Light gallery showing a restored cached library"></td></tr></table>
 
@@ -28,7 +28,7 @@ The app distinguishes a missing device address, an unreachable camera, authentic
 
 ## Originals and Lightroom
 
-JPEG originals are decoded at full resolution. CR2/CR3 rendering uses bundled LibRaw with EOS R50 V support. The viewer identifies when it is still showing a preview. Video playback uses validated camera byte ranges, bounded startup reads and cancellation. Cameras that ignore ranges offer an explicit Download & play action; there is no full-file background playback buffer. Saved videos play locally and can open in another player. Format and codec support depend on the camera and phone.
+JPEG originals are decoded at full resolution. CR2/CR3 rendering uses bundled LibRaw with EOS R50 V support. The viewer identifies when it is still showing a preview. Video playback is removed after camera connection lockups. Videos support thumbnails, ratings and explicit original saving, with no streaming, range probes, autoplay or external-player actions. HTTP clients to the same camera run one at a time through cleanup; background fetching stops after a connection failure. [Investigation and recovery limits](docs/network-lockup.md).
 
 Lr sends an individual photo's original to Lightroom through a read-only private content URI, without creating a permanent Downloads copy. Lightroom owns its import, edits and deletion behavior. The app cannot confirm import completion, retrieve edits automatically, or guarantee Adobe's local/cloud cleanup. Temporary handoffs are cleaned after the last reader releases them, with startup expiry cleanup after interruptions. [Storage and feature details](MEDIA.md).
 
@@ -44,6 +44,7 @@ Use JDK 21, Android SDK platform 36 and build tools 36.0.0:
 
 ```bash
 ./gradlew :app:assembleRelease :app:lintRelease :app:testDebugUnitTest
+python3 scripts/check-no-video-playback.py
 bash check-protocols.sh
 bash check-ccapi-links.sh
 bash check-media.sh

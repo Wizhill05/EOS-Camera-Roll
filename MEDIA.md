@@ -1,4 +1,4 @@
-# EOS Camera Roll 0.6.3
+# EOS Camera Roll 0.6.4
 
 An Android app for browsing, culling and copying original photos and recorded videos from the Canon EOS R50 V over CCAPI. Install this APK over the existing Camera Link Lab / EOS Camera Roll app. It uses the same package and development signing certificate. Do not uninstall first if you want to keep connection preferences and local ratings.
 
@@ -22,7 +22,7 @@ Ratings and saved receipts use the camera's reported serial number when availabl
 
 ## Gallery request policy
 
-A cached thumbnail is returned without a camera request, including after refresh or process restart. An uncached tile requests `kind=thumbnail`; optional small `kind=info` JSON is lower priority, bounded to 64 KiB with short timeouts, and skipped after the camera reports no rotation for that format or a metadata request fails. No original/header or display-image GET is issued by grid browsing. Full originals and display previews are requested only for a photo that is opened, saved or sent to Lightroom. Recorded videos are streamed only after Play.
+A cached thumbnail is returned without a camera request, including after refresh or process restart. An uncached tile requests `kind=thumbnail`; optional small `kind=info` JSON is lower priority, bounded to 64 KiB with short timeouts, and skipped after the camera reports no rotation for that format or a metadata request fails. No original/header or display-image GET is issued by grid browsing. Full originals and display previews are requested only for a photo that is opened, saved or sent to Lightroom. Recorded videos have no playback or streaming path.
 
 One gallery worker handles network requests, with at most 16 waiting jobs. Thumbnail jobs precede metadata. Recycled tiles are skipped and stale queued work is discarded during scrolling, pausing, refresh, backgrounding and transfers. Opening the viewer cancels grid requests. Thumbnail completion updates one indexed row instead of rehashing/scanning the entire library.
 
@@ -57,11 +57,11 @@ Lightroom must be installed. It controls its own import, editing and storage. EO
 
 The handoff file is removed 60 seconds after the last reader closes it, provided no reader has reopened it. If the app process is interrupted, startup cleanup removes handoff files older than 24 hours. Lightroom's imported copy is then managed inside Lightroom. Lightroom handoff does not set the green saved mark. This release hands off individual photos, not video batches.
 
-## Video playback
+## Videos
 
-Tap Play video. The timeline supports seeking and shows elapsed/total time once Android's player is prepared. Original bytes use the selected camera route and account handling. Live playback requires a successful one-byte range probe; subsequent reads use a bounded 2 MiB block cache. The app never silently downloads an entire movie for playback. If the camera ignores ranges, a request fails, or playback stalls, it cancels that stream and offers Download & play. This explicitly saves the original to your chosen download folder with the normal transfer progress and notification, then plays the saved document locally. Saved videos also play without a camera connection. If Android cannot decode the saved recording, Open with player shares that saved file with a player of your choice.
+Video playback is removed. Opening a video shows the cached camera thumbnail, local stars and Save. There is no player, seek bar, range probe, Download & play, autoplay or external-player handoff. Save explicitly copies the original to your selected folder with progress and a result notification. No video is downloaded just by opening it.
 
-Playback depends on the camera's HTTP behavior and the phone's codecs. High bitrate, 4K and 10-bit recordings may buffer or be unsupported. Save still copies the original without transcoding. Playback stops and releases camera requests on error, completion, leaving the viewer, backgrounding and refresh. Startup is limited to 8 MiB of requested ranges before the first frame and a 12-second progress deadline; individual reads use short socket timeouts. Native player release runs outside the UI thread. A new camera stream cannot start while a transfer is running.
+HTTP clients for the same camera share one request slot through response cleanup. Small thumbnail responses finish when the viewer opens, without routine interruption. Automatic loading stops after a connection failure; cached photos remain visible. Use Refresh after checking the camera connection. An already-unresponsive camera may still require a camera-side CCAPI disconnect/reconnect or power cycle; the app cannot reset its communication service. See [the investigation](docs/network-lockup.md).
 
 ## Build and verify
 

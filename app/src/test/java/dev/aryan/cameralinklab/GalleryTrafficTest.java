@@ -49,6 +49,20 @@ public class GalleryTrafficTest {
             ImageView next=new ImageView(context);images.thumbnail(item(1),next);waitFor(()->loaded(next));
         }finally{server.displayGate.countDown();}
     }
+    @Test public void videoThumbnailsNeverProbeOriginalsOrRanges()throws Exception{
+        server.poisonOnRange=true;ImageView view=new ImageView(context);MediaItem video=new MediaItem(new URL(server.origin()+"/ccapi/ver140/contents/card1/XFVC/CLIP.MP4"));images.thumbnail(video,view);waitFor(()->loaded(view));idle();assertEquals(Collections.singletonList(video.url.getPath()+"?kind=thumbnail"),server.targets);assertTrue(server.ranges.isEmpty());assertFalse(server.poisoned);
+    }
+    @Test public void openingViewerLetsTheSmallThumbnailFinishBeforeAnotherRequest()throws Exception{
+        images.close();session.close();List<String> log=new java.util.concurrent.CopyOnWriteArrayList<>();session=new CameraSession(new URL(server.origin()+"/ccapi"),null,"","",log::add);images=new GalleryImages(context,session,()->{});server.thumbnailGate=new java.util.concurrent.CountDownLatch(1);images.thumbnail(item(0),new ImageView(context));waitFor(()->server.requests.get()==1);images.setPaused(true);
+        java.util.concurrent.ExecutorService api=java.util.concurrent.Executors.newSingleThreadExecutor();try{java.util.concurrent.Future<?> info=api.submit(()->{try{session.json(MediaCatalog.query(item(0).url,"kind=info"));}catch(Exception error){throw new RuntimeException(error);}});
+            try{info.get(150,java.util.concurrent.TimeUnit.MILLISECONDS);fail("Another request overtook the small thumbnail");}catch(java.util.concurrent.TimeoutException expected){assertEquals(1,server.requests.get());}
+            server.thumbnailGate.countDown();info.get(3,java.util.concurrent.TimeUnit.SECONDS);idle();assertTrue("Finish the response instead of aborting on viewer entry: "+log,log.stream().anyMatch(line->line.startsWith("HTTP: closed; "+server.thumbnail.length+" bytes;")));
+        }finally{server.thumbnailGate.countDown();api.shutdownNow();}
+    }
+    @Test public void firstCameraFailureStopsTheThumbnailQueueUntilRefresh()throws Exception{
+        server.failThumbnails=true;List<ImageView> views=new ArrayList<>();for(int i=0;i<10;i++){ImageView view=new ImageView(context);views.add(view);images.thumbnail(item(i),view);}idle();assertEquals("Do not issue the rest of the queued requests to a failing camera",1,server.requests.get());assertFalse(images.networkEnabled);
+        server.failThumbnails=false;images.refresh();ImageView retried=new ImageView(context);images.thumbnail(item(0),retried);waitFor(()->loaded(retried));idle();assertTrue(images.networkEnabled);
+    }
     @Test public void refreshAndRebindReuseCacheWithoutCameraRequests()throws Exception{
         MediaItem item=item(0);ImageView first=new ImageView(context);images.thumbnail(item,first);waitFor(()->loaded(first));idle();int initial=server.requests.get();images.refresh();ImageView rebound=new ImageView(context);images.thumbnail(item,rebound);waitFor(()->loaded(rebound));idle();assertEquals("A cached thumbnail must not trigger metadata revalidation",initial,server.requests.get());
         images.close();images=new GalleryImages(context,session,()->{});ImageView restarted=new ImageView(context);images.thumbnail(item,restarted);waitFor(()->loaded(restarted));idle();assertEquals("The persisted thumbnail must work without another request",initial,server.requests.get());

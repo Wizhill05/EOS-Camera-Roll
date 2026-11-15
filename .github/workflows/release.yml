@@ -9,6 +9,7 @@ on:
       - '*.gradle'
       - 'gradle.properties'
       - 'scripts/release.sh'
+      - 'scripts/check-no-video-playback.py'
       - '.github/workflows/release.yml'
   workflow_dispatch:
 permissions:

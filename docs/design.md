@@ -24,4 +24,4 @@ Cached thumbnails are available after restart. A restored library says it needs 
 
 Show the camera thumbnail first. Embedded thumbnail EXIF and optional small Canon rotation JSON can normalize it. Never fetch an original or its header to populate the grid. If rotation is missing, the explicit photo viewer learns it from the original and replaces that cached thumbnail. Cached tiles never trigger network revalidation; visible thumbnail work outranks optional metadata.
 
-Video viewers use a cached cover without making background thumbnail or metadata requests. Live playback requires validated byte ranges, bounded startup reads and a progress deadline. If streaming fails, offer Download & play in the chosen folder, then use the saved document URI. Never silently spool a full video. Stop and cancel on error, completion, navigation, backgrounding and refresh; native player release must not block the main thread.
+Video viewers use a cached cover, local ratings and an explicit Save action. Do not add playback, seeking, range probes, automatic downloads or external-player handoffs. Tile badges show the video format instead of a play triangle.

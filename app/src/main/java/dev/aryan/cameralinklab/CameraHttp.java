@@ -12,6 +12,14 @@ import java.util.function.Consumer;
 final class CameraHttp implements AutoCloseable {
     interface Opener { URLConnection open(URL url) throws IOException; }
     private static final ExecutorService cancellations=Executors.newCachedThreadPool(task->{Thread thread=new Thread(task,"camera-disconnect");thread.setDaemon(true);return thread;});
+    private static final ConcurrentMap<String,Semaphore> cameras=new ConcurrentHashMap<>();
+    private static final ScheduledExecutorService deadlines=Executors.newSingleThreadScheduledExecutor(task->{Thread thread=new Thread(task,"camera-deadline");thread.setDaemon(true);return thread;});
+    private final Object state=new Object();
+    private Semaphore camera;
+    private String origin;
+    private ScheduledFuture<?> deadlineTask;
+    private long deadlineMillis,started,received;
+    private volatile boolean expired;
     private final Opener opener;
     private final String username, password;
     private final Consumer<String> trace;
@@ -30,6 +38,8 @@ final class CameraHttp implements AutoCloseable {
 
     CameraHttp timeouts(int connect,int read){if(connect<=0||read<=0)throw new IllegalArgumentException("Timeout must be positive");connectTimeout=connect;readTimeout=read;return this;}
 
+    CameraHttp deadline(long millis){if(millis<=0)throw new IllegalArgumentException("Deadline must be positive");deadlineMillis=millis;return this;}
+
     static URL url(String text) throws IOException {
         URL u = new URL(text.trim());
         if (!(u.getProtocol().equals("http") || u.getProtocol().equals("https")) || u.getHost().isEmpty()
@@ -45,12 +55,12 @@ final class CameraHttp implements AutoCloseable {
     private static int port(URL u) { return u.getPort() < 0 ? u.getDefaultPort() : u.getPort(); }
 
     HttpURLConnection get(URL url) throws IOException {
-        return request(url, Collections.emptyMap(), false);
-    }
-
-    HttpURLConnection request(URL url, Map<String,String> headers, boolean allowPartial) throws IOException {
-        trace.accept("REQUEST: GET " + url.getPath());
-        HttpURLConnection c = open(url, null, headers);
+        checkRunning();
+        if(started==0){started=System.nanoTime();if(deadlineMillis>0)deadlineTask=deadlines.schedule(()->{expired=true;cancel();},deadlineMillis,TimeUnit.MILLISECONDS);}
+        acquire(url);
+        String query=url.getQuery();
+        trace.accept("REQUEST: GET " + url.getPath() + (query!=null&&query.matches("kind=(thumbnail|display|info|number)|page=[0-9]+")?" ["+query+"]":""));
+        HttpURLConnection c = open(url, null);
         int status = c.getResponseCode();
         ensureActive(c);
         trace.accept("HTTP: initial response " + status);
@@ -62,13 +72,13 @@ final class CameraHttp implements AutoCloseable {
             if (username.isEmpty()) throw new IOException("HTTP 401 before authentication: enter the CCAPI account in the app. No authenticated request was sent.");
             String authorization = authorization(challenge, url, username, password);
             trace.accept("AUTH: sending " + (authorization.startsWith("Digest") ? "Digest" : "Basic") + " response. Credentials and authorization header are excluded from this log.");
-            c = open(url, authorization, headers);
+            c = open(url, authorization);
             status = c.getResponseCode();
             ensureActive(c);
             trace.accept("AUTH: authenticated response " + status);
             if (status == 401) trace.accept("AUTH: rejection challenge: " + challengeSummary(c.getHeaderField("WWW-Authenticate")));
         }
-        if (status != 200 && !(allowPartial && status == 206)) {
+        if (status != 200) {
             c.disconnect();
             if (status == 401) throw new IOException("HTTP 401 after the app sent an authentication response. This does not distinguish incorrect credentials from an authentication compatibility issue. Share the AUTH log lines.");
             if (status >= 300 && status < 400) throw new IOException("HTTP " + status + ": redirect refused. Enter the exact camera URL.");
@@ -104,15 +114,15 @@ final class CameraHttp implements AutoCloseable {
         StatusException(int status, String message) { super(message); this.status=status; }
     }
 
-    private HttpURLConnection open(URL url, String authorization, Map<String,String> headers) throws IOException {
-        if (cancelled) throw new IOException("Cancelled");
+    private HttpURLConnection open(URL url, String authorization) throws IOException {
+        checkRunning();
         HttpURLConnection c = (HttpURLConnection)opener.open(url);
         active = c;
-        if (cancelled) { c.disconnect(); throw new IOException("Cancelled"); }
+        if (cancelled) { c.disconnect(); checkRunning(); }
         c.setConnectTimeout(connectTimeout); c.setReadTimeout(readTimeout);
         c.setInstanceFollowRedirects(false); c.setUseCaches(false);
         c.setRequestMethod("GET"); c.setRequestProperty("Accept-Encoding", "identity");
-        for (Map.Entry<String,String> header : headers.entrySet()) c.setRequestProperty(header.getKey(), header.getValue());
+        c.setRequestProperty("Connection", "close");
         if (authorization != null) c.setRequestProperty("Authorization", authorization);
         return c;
     }
@@ -165,7 +175,44 @@ final class CameraHttp implements AutoCloseable {
         catch (NoSuchAlgorithmException e) { throw new IOException(e); }
     }
     static String hex(byte[] b) { StringBuilder s=new StringBuilder(); for(byte v:b)s.append(String.format(Locale.US,"%02x",v & 255));return s.toString(); }
-    private void ensureActive(HttpURLConnection connection)throws IOException{if(cancelled){connection.disconnect();throw new IOException("Cancelled");}}
+    private void acquire(URL url)throws IOException {
+        String key=url.getProtocol().toLowerCase(Locale.ROOT)+"://"+url.getHost().toLowerCase(Locale.ROOT)+":"+port(url);
+        synchronized(state){if(camera!=null){if(!key.equals(origin))throw new IOException("Cannot reuse a camera connection across servers");checkRunning();return;}}
+        Semaphore next=cameras.computeIfAbsent(key,ignored->new Semaphore(1,true));long until=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(connectTimeout);
+        try{
+            while(true){checkRunning();if(System.nanoTime()>=until)throw new BusyException();
+                if(next.tryAcquire(50,TimeUnit.MILLISECONDS)){
+                    synchronized(state){if(cancelled){next.release();checkRunning();}camera=next;origin=key;}return;
+                }
+            }
+        }catch(InterruptedException error){Thread.currentThread().interrupt();throw new InterruptedIOException("Camera request cancelled");}
+    }
+    private void checkRunning()throws IOException{
+        if(expired)throw new SocketTimeoutException("Camera request exceeded its total time limit. Background loading stopped; refresh to retry.");
+        if(cancelled)throw new InterruptedIOException("Camera request cancelled");
+    }
+    private void ensureActive(HttpURLConnection connection)throws IOException{if(cancelled){connection.disconnect();checkRunning();}}
+    InputStream body()throws IOException{
+        checkRunning();HttpURLConnection connection=active;if(connection==null)throw new IOException("No camera response");
+        return new FilterInputStream(connection.getInputStream()){
+            @Override public int read(byte[] bytes,int offset,int count)throws IOException{
+                checkRunning();try{int n=in.read(bytes,offset,count);checkRunning();if(n>0)received+=n;return n;}catch(IOException error){checkRunning();throw error;}
+            }
+            @Override public int read()throws IOException{byte[] one=new byte[1];int n=read(one,0,1);return n<0?-1:one[0]&255;}
+        };
+    }
+    byte[] read(int maximum)throws IOException{
+        checkRunning();if(active.getContentLengthLong()>maximum)throw new ResponseTooLargeException();
+        try(InputStream in=body()){
+            try{return readBounded(in,maximum);}catch(IOException error){if(error.getMessage()!=null&&error.getMessage().startsWith("Response exceeds"))throw new ResponseTooLargeException();throw error;}
+        }
+    }
+    static final class BusyException extends SocketTimeoutException{BusyException(){super("The previous camera request is still finishing. Wait, then refresh.");}}
+    static final class ResponseTooLargeException extends IOException{ResponseTooLargeException(){super("Camera returned an oversized preview. Background loading stopped to avoid fetching originals.");}}
     void cancel(){cancelled=true;HttpURLConnection connection=active;if(connection!=null)cancellations.execute(connection::disconnect);}
-    @Override public void close() { cancelled=true; HttpURLConnection c=active;if(c!=null)c.disconnect(); }
+    @Override public void close(){
+        cancelled=true;if(deadlineTask!=null)deadlineTask.cancel(false);
+        try{HttpURLConnection connection=active;if(connection!=null)connection.disconnect();}
+        finally{synchronized(state){if(camera!=null){camera.release();camera=null;trace.accept("HTTP: closed; "+received+" bytes; "+TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started)+" ms"+(expired?"; deadline":received==0?"; no body read":""));}}}
+    }
 }

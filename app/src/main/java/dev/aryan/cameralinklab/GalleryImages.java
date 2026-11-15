@@ -21,10 +21,10 @@ final class GalleryImages implements AutoCloseable {
     private final Context context;
     private final ThumbnailStore disk;
     private final Consumer<String> changed;
+    private final Consumer<LibraryIssue> unavailable;
     private final Handler main=new Handler(Looper.getMainLooper());
     private static final AtomicLong sequence=new AtomicLong();
     private final ThreadPoolExecutor thumbs=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new WorkQueue());
-    private volatile CameraHttp activeThumbnail;
     private volatile int thumbnailEpoch;
     private volatile boolean rotationRequests=true;
     private final Set<String> noRotation=ConcurrentHashMap.newKeySet();
@@ -40,13 +40,13 @@ final class GalleryImages implements AutoCloseable {
     private volatile long rawJob;
     private volatile CameraSession previewSession;
     GalleryImages(Context context,CameraSession session,Runnable changed){this(context,session,key->changed.run());}
-    GalleryImages(Context context,CameraSession session,Consumer<String> changed){this.context=context.getApplicationContext();this.session=session;this.changed=changed;disk=new ThumbnailStore(context);}
+    GalleryImages(Context context,CameraSession session,Consumer<String> changed){this(context,session,changed,error->{});}
+    GalleryImages(Context context,CameraSession session,Consumer<String> changed,Consumer<LibraryIssue> unavailable){this.unavailable=unavailable;this.context=context.getApplicationContext();this.session=session;this.changed=changed;disk=new ThumbnailStore(context);}
     float ratio(MediaItem item){return disk.ratio(session.key(item));}
     void refresh(){networkEnabled=true;failed.clear();rotationRequests=true;noRotation.clear();}
     void setPaused(boolean value){
-        paused=value;if(!value)return;thumbnailEpoch++;pending.clear();
+        if(paused==value)return;paused=value;if(!value)return;thumbnailEpoch++;pending.clear();
         for(Runnable queued:thumbs.getQueue().toArray(new Runnable[0]))if(thumbs.remove(queued))((Work)queued).discard();
-        CameraHttp client=activeThumbnail;activeThumbnail=null;if(client!=null)CompletableFuture.runAsync(client::close);
     }
     void recycle(ImageView view){Object key=view.getTag();if(key instanceof String)targets.computeIfPresent((String)key,(k,target)->target.get()==view?null:target);view.setTag(null);}
     private ImageView target(String key){WeakReference<ImageView> reference=targets.get(key);ImageView view=reference==null?null:reference.get();return view!=null&&key.equals(view.getTag())?view:null;}
@@ -68,12 +68,11 @@ final class GalleryImages implements AutoCloseable {
     private byte[] readSmall(MediaItem item,String kind,int maximum,int timeout,int epoch)throws IOException{
         if(closed||paused||!networkEnabled||epoch!=thumbnailEpoch)throw new IOException("Thumbnail cancelled");
         if(!CameraHttp.sameOrigin(session.root,item.url))throw new IOException("Invalid camera origin");
-        CameraHttp client=session.client().timeouts(1500,timeout);activeThumbnail=client;
+        CameraHttp client=session.client().timeouts(1500,timeout).deadline(1500L+timeout);
         try{
             if(closed||paused||epoch!=thumbnailEpoch)throw new IOException("Thumbnail cancelled");
-            HttpURLConnection connection=client.get(MediaCatalog.query(item.url,"kind="+kind));
-            try(InputStream in=connection.getInputStream()){return CameraHttp.readBounded(in,maximum);}finally{connection.disconnect();}
-        }finally{if(activeThumbnail==client)activeThumbnail=null;session.clients.remove(client);client.close();}
+            client.get(MediaCatalog.query(item.url,"kind="+kind));return client.read(maximum);
+        }finally{try{client.close();}finally{session.clients.remove(client);}}
     }
     void thumbnail(MediaItem item,ImageView view){
         String key=session.key(item);if(!key.equals(view.getTag()))recycle(view);view.setTag(key);targets.put(key,new WeakReference<>(view));Bitmap hit=cache.get(key);if(hit!=null){view.setImageBitmap(hit);return;}view.setImageDrawable(null);
@@ -87,7 +86,7 @@ final class GalleryImages implements AutoCloseable {
                 if(closed||paused||epoch!=thumbnailEpoch||target(key)==null)return;
                 Bitmap image=decode(bytes,640,0);disk.orientation(key,0);disk.write(key,image);cache.put(key,image);deliver(key,image,epoch);
                 if(!item.video&&ExifOrientation.read(bytes)<=1)enqueue(new Work(1,key,()->completeOrientation(item,key,bytes,epoch)));
-            }catch(Exception error){if(!closed&&!paused&&epoch==thumbnailEpoch&&networkEnabled&&target(key)!=null){failed.add(key);session.log.accept("Thumbnail unavailable for "+item.name+": "+error.getMessage());}}
+            }catch(Exception error){if(!closed&&!paused&&epoch==thumbnailEpoch&&networkEnabled&&target(key)!=null){failed.add(key);session.log.accept("Thumbnail unavailable for "+item.name+": "+error.getMessage());if(LibraryIssue.stopsBackgroundLoading(error)){networkEnabled=false;rotationRequests=false;session.log.accept("NETWORK: background loading stopped after the first connection failure; refresh required.");main.post(()->{if(!closed&&!networkEnabled)unavailable.accept(LibraryIssue.from(error));});}}}
         }));
     }
     private void completeOrientation(MediaItem item,String key,byte[] bytes,int epoch){

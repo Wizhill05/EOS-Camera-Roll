@@ -212,7 +212,7 @@ public final class MainActivity extends Activity {
         task=worker.submit(()->{try{if(!cancelled)work.run();}catch(Exception e){failure(e);}finally{main.post(()->{if(destroyed)return;busy=false;progress.setVisibility(View.GONE);taskButtons.forEach(b->b.setEnabled(true));getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);status.setText(cancelled?"Test cancelled":"Test finished. See log for result.");});}});
     }
     private void cancel(){
-        if(!busy)return;cancelled=true;if(ptp!=null)ptp.close();if(http!=null)http.close();if(discovery!=null)discovery.close();log("CANCEL: requested; closing active connections.");
+        if(!busy)return;cancelled=true;if(ptp!=null)ptp.close();if(http!=null)http.cancel();if(discovery!=null)discovery.close();log("CANCEL: requested; closing active connections.");
     }
     private void failure(Exception error){
         while(error.getCause() instanceof Exception)error=(Exception)error.getCause();

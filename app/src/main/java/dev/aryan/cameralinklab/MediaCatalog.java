@@ -28,7 +28,7 @@ final class MediaCatalog {
         }
         if(roots.isEmpty())throw new IOException("The camera did not advertise a readable media library.");
         List<URL> identities=new ArrayList<>();readApiEntries(table,"",identities,"deviceinformation");
-        if(!identities.isEmpty())try{Object info=transport.json(identities.get(0));if(info instanceof JSONObject){String serial=((JSONObject)info).optString("serialnumber","");if(!serial.isEmpty())transport.cameraIdentity("serial:"+serial);}}catch(IOException ignored){log.accept("Camera identity unavailable; labels use the camera address.");}
+        if(!identities.isEmpty())try{Object info=transport.json(identities.get(0));if(info instanceof JSONObject){String serial=((JSONObject)info).optString("serialnumber","");if(!serial.isEmpty())transport.cameraIdentity("serial:"+serial);}}catch(IOException error){if(LibraryIssue.connectionLost(error))throw error;log.accept("Camera identity unavailable; labels use the camera address.");}
         roots.sort(Comparator.comparingInt((URL u)->version(u.getPath())).reversed());
         URL root=roots.get(0);
         ArrayDeque<URL> pending=new ArrayDeque<>();pending.add(root);
@@ -48,7 +48,7 @@ final class MediaCatalog {
                     else if(!MediaItem.hasExtension(child.getPath()))pending.addLast(child);
                 }
             }catch(IOException error) {
-                if(cancelled.getAsBoolean())throw error;
+                if(cancelled.getAsBoolean()||LibraryIssue.connectionLost(error))throw error;
                 if(folder.equals(root))throw error;
                 warnings.add("Could not read "+folder.getPath()+": "+error.getMessage());
             }

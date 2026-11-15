@@ -13,6 +13,7 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 ./gradlew --no-daemon :app:assembleRelease :app:lintRelease :app:testDebugUnitTest
+python3 scripts/check-no-video-playback.py
 bash check-protocols.sh
 bash check-ccapi-links.sh
 bash check-media.sh
