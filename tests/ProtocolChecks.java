@@ -108,6 +108,7 @@ public final class ProtocolChecks {
         Matcher nonce=Pattern.compile("cnonce=\"([^\"]+)\"").matcher(auth);if(!nonce.find())throw new AssertionError("No cnonce");
         String expected=md5("939e7578ed9e3c518a452acee763bce9:dcd98b7102dd2f0e8b11d0f600bfb0c093:00000001:"+nonce.group(1)+":auth:39aff3a2bab6126f332b942af96d3366");
         check(auth.contains("response=\""+expected+"\""),"Digest matches independent RFC example calculation");
+        String put=CameraHttp.authorization(challenge,new URL("http://camera/dir/index.html"),"Mufasa","Circle Of Life","PUT");Matcher putNonce=Pattern.compile("cnonce=\"([^\"]+)\"").matcher(put);if(!putNonce.find())throw new AssertionError("No PUT cnonce");String putExpected=md5("939e7578ed9e3c518a452acee763bce9:dcd98b7102dd2f0e8b11d0f600bfb0c093:00000001:"+putNonce.group(1)+":auth:"+md5("PUT:/dir/index.html"));check(put.contains("response=\""+putExpected+"\""),"Digest authentication signs the PUT method rather than GET");
     }
     private static String md5(String s)throws Exception{return CameraHttp.hex(MessageDigest.getInstance("MD5").digest(s.getBytes(StandardCharsets.UTF_8)));}
 

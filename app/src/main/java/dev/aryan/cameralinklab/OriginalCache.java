@@ -12,7 +12,7 @@ final class OriginalCache {
         File root=new File(context.getCacheDir(),"originals");root.mkdirs();File directory=new File(root,session.key(item));directory.mkdirs();
         File original=new File(directory,"original"),ready=new File(directory,"ready");
         String revision="";
-        try{Object info=session.json(MediaCatalog.query(item.url,"kind=info"));if(info instanceof JSONObject){JSONObject json=(JSONObject)info;revision=json.optString("filesize","")+":"+json.optString("lastmodifieddate","");}}catch(IOException ignored){}
+        try{Object info=session.json(MediaCatalog.query(item.url,"kind=info"));if(info instanceof JSONObject){JSONObject json=(JSONObject)info;new CaptureMetadata(context).camera(session.key(item),json,context);revision=json.optString("filesize","")+":"+json.optString("lastmodifieddate","");}}catch(IOException ignored){}
         if(original.isFile()&&ready.isFile())try(DataInputStream in=new DataInputStream(new FileInputStream(ready))){
             long length=in.readLong();String stamp=in.readUTF();
             if(length==original.length()&&(revision.isEmpty()||revision.equals(stamp))){original.setLastModified(System.currentTimeMillis());progress.accept(length,length);return original;}

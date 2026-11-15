@@ -37,7 +37,7 @@ public class GalleryTrafficTest {
         assertEquals("Browsing must never probe originals, even when Range is ignored",0,server.targets.stream().filter(path->!path.contains("?")).count());
         assertEquals(4,server.targets.stream().filter(path->path.contains("kind=thumbnail")).count());
         assertEquals(1,server.maximumActive.get());
-        assertEquals("Do not keep probing a camera format that omits rotation",1,server.targets.stream().filter(path->path.contains("kind=info")).count());
+        assertEquals("Read small camera ratings even when rotation is missing",4,server.targets.stream().filter(path->path.contains("kind=info")).count());
         assertTrue("Thumbnail jobs must run before optional metadata",server.targets.subList(0,4).stream().allMatch(path->path.contains("kind=thumbnail")));
         assertTrue(server.targets.toString(),server.targets.stream().allMatch(path->path.contains("kind=thumbnail")||path.contains("kind=info")));
     }

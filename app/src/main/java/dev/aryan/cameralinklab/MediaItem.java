@@ -30,6 +30,7 @@ final class MediaItem {
         try { return URLDecoder.decode(text.replace("+", "%2B"), "UTF-8"); }
         catch (java.io.UnsupportedEncodingException impossible) { throw new AssertionError(impossible); }
     }
+    static int cameraRating(org.json.JSONObject info){Object value=info.opt("rating");if(value instanceof org.json.JSONObject)value=((org.json.JSONObject)value).opt("value");if(value==null||value==org.json.JSONObject.NULL)return -1;String text=value.toString();if(text.equalsIgnoreCase("off"))return 0;try{int n=Integer.parseInt(text);return n>=0&&n<=5?n:-1;}catch(NumberFormatException invalid){return -1;}}
     boolean raw() { return extension.equals("CR2") || extension.equals("CR3"); }
     String mime() {
         if(video) return extension.equals("MOV") ? "video/quicktime" : extension.equals("MP4") ? "video/mp4" : "application/octet-stream";

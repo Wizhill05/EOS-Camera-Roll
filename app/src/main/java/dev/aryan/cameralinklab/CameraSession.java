@@ -14,6 +14,16 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
     final Network network;
     final String user, password;
     volatile String identity;
+    volatile String writableContents="";
+    @Override public void writableContents(String path){writableContents=path;}
+    boolean canRate(MediaItem item){return !writableContents.isEmpty()&&item.url.getPath().matches("/ccapi/ver[0-9]+/contents/.+")&&CameraHttp.sameOrigin(root,item.url);}
+    void rate(MediaItem item,int stars)throws IOException{
+        if(stars<0||stars>5||!canRate(item))throw new IOException("Camera does not advertise rating edits");
+        CameraHttp client=client().timeouts(3000,5000).deadline(12000);
+        try{client.put(new URL(root,writableContents+item.url.getPath().substring(item.url.getPath().indexOf("/contents/")+9)),("{\"action\":\"rating\",\"value\":\""+(stars==0?"off":Integer.toString(stars))+"\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8));client.read(65536);}
+        finally{try{client.close();}finally{clients.remove(client);}}
+        Object result=info(item);if(!(result instanceof JSONObject)||MediaItem.cameraRating((JSONObject)result)!=stars)throw new IOException("Camera rating was not confirmed. Refresh ratings before retrying.");
+    }
     final Consumer<String> log;
     final Set<CameraHttp> clients=new CopyOnWriteArraySet<>();
     volatile boolean closed;
@@ -39,6 +49,11 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
         if(!CameraHttp.sameOrigin(root,url))throw new IOException("Invalid camera origin");
         CameraHttp client=client().timeouts(3000,5000).deadline(12000);
         try{client.get(url);return client.read(maximum);}
+        finally{try{client.close();}finally{clients.remove(client);}}
+    }
+    JSONObject info(MediaItem item)throws IOException{
+        if(!CameraHttp.sameOrigin(root,item.url))throw new IOException("Invalid camera origin");CameraHttp client=client().timeouts(1500,1500).deadline(4000);
+        try{client.get(MediaCatalog.query(item.url,"kind=info"));try{return new JSONObject(new String(client.read(65536),java.nio.charset.StandardCharsets.UTF_8));}catch(JSONException error){throw new IOException("Camera returned invalid file information",error);}}
         finally{try{client.close();}finally{clients.remove(client);}}
     }
     SaveResult save(MediaItem item,OutputStream out,BooleanSupplier cancelled,BiConsumer<Long,Long> progress)throws IOException {

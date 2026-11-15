@@ -69,3 +69,18 @@ Java_dev_aryan_cameralinklab_RawRenderer_renderNative(JNIEnv *env, jclass, jstri
         fail(env,"RAW decoder failed");return nullptr;
     }
 }
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_dev_aryan_cameralinklab_RawRenderer_captureNative(JNIEnv *env,jclass,jstring path){
+    const char *filename=env->GetStringUTFChars(path,nullptr);if(!filename)return nullptr;
+    try{
+        LibRaw raw;int result=raw.open_file(filename);env->ReleaseStringUTFChars(path,filename);filename=nullptr;
+        if(result){fail(env,libraw_strerror(result));return nullptr;}
+        jobjectArray values=env->NewObjectArray(8,env->FindClass("java/lang/String"),nullptr);if(!values)return nullptr;
+        double numbers[]={raw.imgdata.other.shutter,raw.imgdata.other.aperture,raw.imgdata.other.iso_speed,raw.imgdata.other.focal_len};
+        for(int i=0;i<4;i++){char value[64]={0};if(numbers[i]>0)snprintf(value,sizeof(value),"%.8g",numbers[i]);jstring text=env->NewStringUTF(value);env->SetObjectArrayElement(values,i,text);env->DeleteLocalRef(text);}
+        const char *strings[]={raw.imgdata.lens.Lens,raw.imgdata.idata.model};for(int i=0;i<2;i++){jstring text=env->NewStringUTF(strings[i]);env->SetObjectArrayElement(values,4+i,text);env->DeleteLocalRef(text);}
+        char width[32],height[32];snprintf(width,sizeof(width),"%u",raw.imgdata.sizes.width);snprintf(height,sizeof(height),"%u",raw.imgdata.sizes.height);
+        jstring w=env->NewStringUTF(width),h=env->NewStringUTF(height);env->SetObjectArrayElement(values,6,w);env->SetObjectArrayElement(values,7,h);env->DeleteLocalRef(w);env->DeleteLocalRef(h);return values;
+    }catch(...){if(filename)env->ReleaseStringUTFChars(path,filename);fail(env,"Could not read RAW capture metadata");return nullptr;}
+}

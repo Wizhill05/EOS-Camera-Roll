@@ -7,7 +7,7 @@ import java.util.function.*;
 import org.json.*;
 
 final class MediaCatalog {
-    interface Transport { Object json(URL url) throws IOException; default void cameraIdentity(String id){} }
+    interface Transport { Object json(URL url) throws IOException; default void cameraIdentity(String id){} default void writableContents(String path){} }
     private final URL origin;
     private final Transport transport;
     private final BooleanSupplier cancelled;
@@ -30,7 +30,7 @@ final class MediaCatalog {
         List<URL> identities=new ArrayList<>();readApiEntries(table,"",identities,"deviceinformation");
         if(!identities.isEmpty())try{Object info=transport.json(identities.get(0));if(info instanceof JSONObject){String serial=((JSONObject)info).optString("serialnumber","");if(!serial.isEmpty())transport.cameraIdentity("serial:"+serial);}}catch(IOException error){if(LibraryIssue.connectionLost(error))throw error;log.accept("Camera identity unavailable; labels use the camera address.");}
         roots.sort(Comparator.comparingInt((URL u)->version(u.getPath())).reversed());
-        URL root=roots.get(0);
+        URL root=roots.get(0);List<URL> writable=new ArrayList<>();readApiEntries(table,"",writable,"contents","put");writable.sort(Comparator.comparingInt((URL u)->version(u.getPath())).reversed());transport.writableContents(writable.isEmpty()?"":writable.get(0).getPath());
         ArrayDeque<URL> pending=new ArrayDeque<>();pending.add(root);
         Set<String> seen=new HashSet<>();LinkedHashMap<String,MediaItem> items=new LinkedHashMap<>();
         while(!pending.isEmpty()) {
@@ -85,10 +85,11 @@ final class MediaCatalog {
     private List<URL> contentRoots(Object json)throws IOException {
         List<URL> found=new ArrayList<>();readApiEntries(json,"",found,"contents");return found;
     }
-    private void readApiEntries(Object json,String ver,List<URL> roots,String leaf) {
+    private void readApiEntries(Object json,String ver,List<URL> roots,String leaf){readApiEntries(json,ver,roots,leaf,"get");}
+    private void readApiEntries(Object json,String ver,List<URL> roots,String leaf,String method) {
         if(json instanceof JSONObject) {
             JSONObject object=(JSONObject)json;
-            Object get=object.opt("get");
+            Object get=object.opt(method);
             if(get!=null&&get!=JSONObject.NULL&&!get.toString().matches("(?i)false|0|no|none|unsupported|")) {
                 String path=object.optString("url",object.optString("path",""));
                 if(!path.isEmpty())try {
@@ -96,8 +97,8 @@ final class MediaCatalog {
                     URL u=resolve(path);if(u.getPath().matches("/ccapi/ver\\d+/"+leaf))roots.add(u);
                 }catch(IOException ignored){}
             }
-            Iterator<String> keys=object.keys();while(keys.hasNext()){String key=keys.next();readApiEntries(object.opt(key),key.matches("ver\\d+")?key:ver,roots,leaf);}
-        }else if(json instanceof JSONArray){JSONArray array=(JSONArray)json;for(int i=0;i<array.length();i++)readApiEntries(array.opt(i),ver,roots,leaf);}
+            Iterator<String> keys=object.keys();while(keys.hasNext()){String key=keys.next();readApiEntries(object.opt(key),key.matches("ver\\d+")?key:ver,roots,leaf,method);}
+        }else if(json instanceof JSONArray){JSONArray array=(JSONArray)json;for(int i=0;i<array.length();i++)readApiEntries(array.opt(i),ver,roots,leaf,method);}
     }
     URL resolve(String path)throws IOException {
         URL u=CameraHttp.url(new URL(origin,path).toString());

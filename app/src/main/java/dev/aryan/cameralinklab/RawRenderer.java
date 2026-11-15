@@ -13,6 +13,8 @@ final class RawRenderer {
         if(!available)throw new IOException("Full RAW rendering is unavailable on this processor");
         return renderNative(file.getAbsolutePath(),job);
     }
+    static String[] capture(File file)throws IOException{if(!available)throw new IOException("RAW metadata unavailable on this processor");return captureNative(file.getAbsolutePath());}
+    private static native String[] captureNative(String path)throws IOException;
     static void cancel(long job){if(available)cancelNative(job);}
     private static native Bitmap renderNative(String path,long job)throws IOException;
     private static native void cancelNative(long job);

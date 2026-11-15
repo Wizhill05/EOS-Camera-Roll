@@ -1,4 +1,4 @@
-# EOS Camera Roll 0.6.4
+# EOS Camera Roll 0.6.5
 
 An Android app for browsing, culling and copying original photos and recorded videos from the Canon EOS R50 V over CCAPI. Install this APK over the existing Camera Link Lab / EOS Camera Roll app. It uses the same package and development signing certificate. Do not uninstall first if you want to keep connection preferences and local ratings.
 
@@ -14,7 +14,7 @@ The library uses three-column square photo tiles with subtle corners, a red acce
 
 The last successful library and normalized thumbnails are cached across restarts. Press Refresh to reconnect; a failed connection retains the cached library and is shown separately from an empty card. Thumbnails are shown before optional rotation metadata. Browsing never probes or downloads original files. Rotation uses embedded thumbnail EXIF or small camera metadata, and normalized thumbnails are cached on disk. If the camera omits both, opening the photo loads its original on demand and updates the cached thumbnail with the correctly rendered image.
 
-Tap a thumbnail to open it. The viewer has previous/next, Save, file information, and a 1–5 star bar. Tap the selected rating again to clear it. Hold a grid item to select multiple items, then rate or save the selection. Ratings are local to EOS Camera Roll; they do not modify camera files, EXIF, XMP, or Lightroom ratings.
+Tap a thumbnail to open it. The viewer has previous/next, Save, file information, and a 1–5 star bar. Tap the selected rating again to clear it. Hold a grid item to select multiple items, then rate or save the selection. Camera ratings are imported from file information. A star edit is written to both members of a pair only when the camera advertises contents PUT. Each file must read back the requested rating before the app labels it a camera rating. Offline, unsupported or unconfirmed edits stay phone-only, including pre-existing app ratings. This does not promise that Lightroom will import Canon ratings.
 
 To save everything rated at least four stars, choose a minimum of four stars in Filters, then open the download sheet and choose Save this view. Photos/Videos and the folder filter also apply to Save view. Copy card ignores the view filters and offers all photos, all videos, or both in a new timestamped folder.
 
@@ -79,3 +79,11 @@ The source includes the built arm64 library. To rebuild it, download the officia
 `python3 native/check-raw.py` downloads the public-domain EOS R50 V test CR3 from raw.pixls.us, verifies its published SHA-256, and exercises the same full-resolution LibRaw settings on the host. Android workflow tests render actual native Android views with Robolectric, load full-resolution JPEG from a local test camera, exercise ratings and saved marks, and check document-provider transfers and Lightroom staging. These are simulated Android tests, not a test of Lightroom installed on the physical phone or the phone's video codecs. See docs/verification.md for the completed checks.
 
 Scope remains images and recorded videos. No capture, camera control, camera deletion, cloud account or upload features are included.
+
+## Paired files, capture settings and filters
+
+Same-folder, same-stem RAW/JPEG files appear as one photo, using the JPEG thumbnail. Ambiguous groups are not merged. The fixed RAW/JPEG tabs choose the viewed original; viewer Save and Lightroom use that chosen file. Bulk Save from the combined/pairs view expands to both originals. RAW-only or JPEG-only filtered bulk saves include only that format. Copy card still includes every physical file. A grouped saved mark requires both originals; per-format views and the viewer show the chosen file's receipt.
+
+The viewer displays available shutter speed, aperture and ISO. Information shows available focal length, lens, camera, capture date, exposure compensation, white balance, flash, metering and dimensions. JPEG details use local original EXIF; RAW exposure/lens details use LibRaw after the original is opened. No grid action fetches original-file headers. Missing metadata is not replaced with the camera's current shooting settings.
+
+Filters include file format, paired/unpaired files, saved state, minimum/exact rating, unrated/unknown ratings, camera/phone rating source, ISO bands and folders. Capture filters use metadata already read from originals, and exclude unknown ISO values. Camera ratings on cached or offscreen photos can be refreshed explicitly from Filters. This action is serialized, uses 64 KiB file-information responses, can be stopped, and offers continuation after a bounded batch. Normal cached browsing does not revalidate every file.

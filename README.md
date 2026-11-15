@@ -7,11 +7,11 @@ EOS Camera Roll is an independent Android companion built around Canon's Camera 
 
 ## Gallery
 
-A red-accented gallery uses three columns of square tiles with subtle corners, dark/light/system appearance, and floating Library / Rated / Saved navigation. Folder and star filters are in the filter sheet; copy actions are in the download sheet. The viewer supports original JPEG and RAW zoom, video thumbnails and saving, local ratings, saving and Lightroom handoff.
+A red-accented gallery uses three columns of square tiles with subtle corners, dark/light/system appearance, and floating Library / Rated / Saved navigation. Folder and star filters are in the filter sheet; copy actions are in the download sheet. The viewer supports original JPEG and RAW zoom, video thumbnails and saving, camera-aware ratings, capture settings and Lightroom handoff.
 
 <table><tr><td><img src="docs/screenshots/gallery-dark.png" width="260" alt="Dark gallery with red controls and a three-column square photo layout"></td><td><img src="docs/screenshots/gallery-light.png" width="260" alt="Light gallery showing a restored cached library"></td></tr></table>
 
-These are rendered Android test screens using crops of a public-domain EOS R50 V sample, not live-camera screenshots. [Sample provenance](docs/verification.md).
+These are rendered Android test screens using crops of a public-domain EOS R50 V sample, not live-camera screenshots. Example exposure values in UI fixtures are synthetic. [Sample provenance](docs/verification.md).
 
 ## Connect and use
 
@@ -19,8 +19,9 @@ These are rendered Android test screens using crops of a public-domain EOS R50 V
 2. Open connection settings from the menu and enter the address shown by the camera. Use Automatic for a camera on your phone hotspot; select camera Wi-Fi when your phone joins the camera network.
 3. Enter CCAPI account details only if the camera requires them. Passwords are not persisted.
 4. Refresh to read the library. Once loaded, the last library and normalized thumbnails are retained between launches. A cached library is labeled as cached until reconnecting succeeds.
-5. Tap a photo to inspect it. Hold a tile to select a batch. Set stars in the viewer or selection bar. Choose a minimum rating in Filters, then save that view from the download sheet.
-6. Choose a writable download folder once. Save uses that folder afterward. Copy card makes a new timestamped folder. Green checks identify completed original downloads.
+5. RAW/JPEG pairs appear once with a JPEG thumbnail. Tap a photo and use the RAW/JPEG tabs to choose the original. Capture settings appear after reading the original. Hold a tile to select a batch. Set stars in the viewer or selection bar. Choose a minimum rating in Filters, then save that view from the download sheet.
+6. Filters include RAW/JPEG, pairs, saved state, minimum/exact stars, unknown ratings, ISO bands and folders. Refresh camera ratings reads small file-information responses in bounded batches; reopen Filters to stop or continue it. ISO filters only include photos whose capture metadata has been read.
+7. Choose a writable download folder once. Save uses that folder afterward. Copy card makes a new timestamped folder. Green checks identify completed original downloads.
 
 Browsing fetches small thumbnails for the current gallery area, with one bounded worker. It never requests original files to build the grid. Cached thumbnails are reused without per-file network revalidation. Optional small rotation metadata runs after thumbnail work; opening a photo is what loads its full-resolution original.
 
@@ -32,7 +33,7 @@ JPEG originals are decoded at full resolution. CR2/CR3 rendering uses bundled Li
 
 Lr sends an individual photo's original to Lightroom through a read-only private content URI, without creating a permanent Downloads copy. Lightroom owns its import, edits and deletion behavior. The app cannot confirm import completion, retrieve edits automatically, or guarantee Adobe's local/cloud cleanup. Temporary handoffs are cleaned after the last reader releases them, with startup expiry cleanup after interruptions. [Storage and feature details](MEDIA.md).
 
-Ratings are local to the app. A saved check is a receipt for a completed original copy, not continuous monitoring of later file deletion. Camera files are not modified or deleted.
+Camera stars are imported from file information. Explicit rating edits write to the camera only when it advertises contents PUT and readback confirms the requested value. Otherwise they stay labelled phone-only. Existing phone ratings are retained until a matching camera value is confirmed. No camera deletion is implemented. A saved check is a historical download receipt, not continuous monitoring of file deletion.
 
 ## Install
 

@@ -25,3 +25,7 @@ Cached thumbnails are available after restart. A restored library says it needs 
 Show the camera thumbnail first. Embedded thumbnail EXIF and optional small Canon rotation JSON can normalize it. Never fetch an original or its header to populate the grid. If rotation is missing, the explicit photo viewer learns it from the original and replaces that cached thumbnail. Cached tiles never trigger network revalidation; visible thumbnail work outranks optional metadata.
 
 Video viewers use a cached cover, local ratings and an explicit Save action. Do not add playback, seeking, range probes, automatic downloads or external-player handoffs. Tile badges show the video format instead of a play triangle.
+
+RAW/JPEG captures occupy one square card with a JPEG cover and a small format badge. The viewer uses stable RAW/JPEG tabs, an exposure summary, a separate rating-source line and the existing Save/Lr actions. Phone-only stars also carry a phone label in grid overlays.
+
+Filters use a tall scrollable bottom sheet with grouped two-column choices, 48dp targets, selected red fills, Reset and a fixed Show results button. Include RAW, JPEG, pairs/unpaired, saved status, at-least/exact stars, unrated/unknown, camera/phone rating source, cached ISO bands and folders. Camera-rating refresh is explicit and stoppable.

@@ -85,14 +85,15 @@ final class GalleryImages implements AutoCloseable {
                 byte[] bytes=readSmall(item,"thumbnail",2*1024*1024,4000,epoch);
                 if(closed||paused||epoch!=thumbnailEpoch||target(key)==null)return;
                 Bitmap image=decode(bytes,640,0);disk.orientation(key,0);disk.write(key,image);cache.put(key,image);deliver(key,image,epoch);
-                if(!item.video&&ExifOrientation.read(bytes)<=1)enqueue(new Work(1,key,()->completeOrientation(item,key,bytes,epoch)));
+                if(!item.video)enqueue(new Work(1,key,()->completeOrientation(item,key,bytes,epoch)));
             }catch(Exception error){if(!closed&&!paused&&epoch==thumbnailEpoch&&networkEnabled&&target(key)!=null){failed.add(key);session.log.accept("Thumbnail unavailable for "+item.name+": "+error.getMessage());if(LibraryIssue.stopsBackgroundLoading(error)){networkEnabled=false;rotationRequests=false;session.log.accept("NETWORK: background loading stopped after the first connection failure; refresh required.");main.post(()->{if(!closed&&!networkEnabled)unavailable.accept(LibraryIssue.from(error));});}}}
         }));
     }
     private void completeOrientation(MediaItem item,String key,byte[] bytes,int epoch){
-        if(!networkEnabled||!rotationRequests||noRotation.contains(item.extension))return;
+        if(!networkEnabled||!rotationRequests)return;
         try{
             JSONObject info=new JSONObject(new String(readSmall(item,"info",65536,1000,epoch),StandardCharsets.UTF_8));
+            new CaptureMetadata(context).camera(key,info,context);main.post(()->{if(!closed)changed.accept(key);});
             int orientation=ExifOrientation.fromDegrees(info.optInt("rotate",info.optInt("rotation",-1)));
             if(orientation==0){noRotation.add(item.extension);return;}
             if(closed||paused||epoch!=thumbnailEpoch||target(key)==null)return;
@@ -135,6 +136,7 @@ final class GalleryImages implements AutoCloseable {
                     full=BitmapFactory.decodeFile(original.getPath());if(full==null)throw new IOException("Phone cannot decode this format");
                     full=orient(full,new ExifInterface(original.getPath()).getAttributeInt(ExifInterface.TAG_ORIENTATION,1));
                 }
+                if(item.raw())new CaptureMetadata(context).raw(key,original);else new CaptureMetadata(context).original(key,original,context);
                 Bitmap rendered=full;try{rememberPreview(item,rendered,original);}catch(IOException cacheError){session.log.accept("Could not cache the opened photo thumbnail");}main.post(()->{if(!cancelled.getAsBoolean()){loaded.accept(rendered);note.accept("Full resolution  "+rendered.getWidth()+" × "+rendered.getHeight());progress.accept(-1L,-1L);}else rendered.recycle();});
             }catch(Exception|OutOfMemoryError error){main.post(()->{if(!cancelled.getAsBoolean()){note.accept("Preview only • "+(error instanceof OutOfMemoryError?"Not enough memory":error.getMessage()));progress.accept(-1L,-1L);}});}
             finally{previewSource.close();if(previewSession==previewSource)previewSession=null;}
