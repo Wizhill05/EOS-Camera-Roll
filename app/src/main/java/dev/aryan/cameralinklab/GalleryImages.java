@@ -44,7 +44,8 @@ final class GalleryImages implements AutoCloseable {
                 try{Object value=session.json(MediaCatalog.query(item.url,"kind=info"));if(value instanceof JSONObject){info=(JSONObject)value;revision=ThumbnailStore.revision(info);}}
                 catch(CameraHttp.StatusException unsupported){if(unsupported.status!=400&&unsupported.status!=404&&unsupported.status!=405)throw unsupported;}
                 if(saved!=null&&(revision.isEmpty()||revision.equals(disk.revision(key)))){validated.add(key);return;}
-                if(saved!=null){cache.remove(key);disk.invalidate(key);}
+                // A missing or changed cache entry must not inherit another file revision's orientation.
+                cache.remove(key);disk.invalidate(key);
                 byte[] bytes=session.bytes(MediaCatalog.query(item.url,"kind=thumbnail"),8*1024*1024);
                 int fallback=disk.orientation(key);
                 if(!item.video&&ExifOrientation.read(bytes)<=1&&fallback==0){

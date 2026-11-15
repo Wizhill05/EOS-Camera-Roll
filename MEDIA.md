@@ -1,4 +1,4 @@
-# EOS Camera Roll 0.6.0
+# EOS Camera Roll 0.6.1
 
 An Android app for browsing, culling and copying original photos and recorded videos from the Canon EOS R50 V over CCAPI. Install this APK over the existing Camera Link Lab / EOS Camera Roll app. It uses the same package and development signing certificate. Do not uninstall first if you want to keep connection preferences and local ratings.
 
