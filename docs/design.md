@@ -22,4 +22,4 @@ The library's shape and photos are the visual focus. Controls stay quiet until s
 
 Cached thumbnails are available after restart. A restored library says it needs refresh, not that the camera is connected. A successful empty scan, an empty filter, an unreachable camera, missing hostname, authentication rejection and partial scan must remain different states. Keep old thumbnails visible through refresh and failure.
 
-Thumbnail orientation follows the image's EXIF, Canon's explicit rotation metadata, or bounded original-file EXIF when the small JPEG omits it. Store normalized thumbnails so restart does not reintroduce the rotation bug. Never infer that all wide thumbnails are portrait.
+Show the camera thumbnail first. Embedded thumbnail EXIF and optional small Canon rotation JSON can normalize it. Never fetch an original or its header to populate the grid. If rotation is missing, the explicit photo viewer learns it from the original and replaces that cached thumbnail. Cached tiles never trigger network revalidation; visible thumbnail work outranks optional metadata.

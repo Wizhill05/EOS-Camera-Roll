@@ -48,11 +48,12 @@ public final class GalleryMediaChecks {
         Map<String,Object> fixture=fixture();fixture.remove(VIDEOS);MediaCatalog catalog=new MediaCatalog(new URL("http://camera:8080/ccapi"),transport(fixture,new HashSet<>()),()->false,s->{});
         List<MediaItem> items=catalog.scan(partial->{});check(items.size()==2&&catalog.warnings.stream().anyMatch(s->s.contains("Could not read")),"Expose partial library after a folder error");
     }
-    private static void culling(){
+    private static void culling()throws Exception{
         String first=MediaKey.of("serial:r50v","/ccapi/ver100/contents/card1/DCIM/100CANON/IMG_0001.CR3");
         check(first.equals(MediaKey.of("serial:r50v","/ccapi/ver140/contents/card1/DCIM/100CANON/IMG_0001.CR3")),"Keep ratings and save receipts stable across API versions");
         check(!first.equals(MediaKey.of("serial:other","/ccapi/ver140/contents/card1/DCIM/100CANON/IMG_0001.CR3")),"Keep cameras with the same filenames separate");
         check(!first.equals(MediaKey.of("serial:r50v","/ccapi/ver140/contents/card1/DCIM/101CANON/IMG_0001.CR3")),"Keep identical filenames in separate folders distinct");
+        MediaItem identityItem=new MediaItem(new URL("http://camera/ccapi/ver140/contents/card1/DCIM/100CANON/IMG_0001.CR3"));String identityKey=identityItem.keyFor("serial:r50v");check(!identityKey.equals(identityItem.keyFor("serial:other"))&&identityKey.equals(identityItem.keyFor("serial:r50v")),"Keep memoized media keys correct when the camera identity changes");
         check(MediaKey.matchesRating(0,0)&&MediaKey.matchesRating(5,0),"All ratings includes unrated media");
         check(MediaKey.matchesRating(4,4)&&MediaKey.matchesRating(5,4)&&!MediaKey.matchesRating(3,4)&&!MediaKey.matchesRating(0,4),"Minimum star filter includes the threshold and higher ratings");
     }
@@ -100,9 +101,7 @@ public final class GalleryMediaChecks {
                 check(Arrays.equals(media,saved.toByteArray())&&result.bytes==media.length,"Save original bytes unchanged through the gallery transfer engine");
                 check(result.hash.equals(CameraHttp.hex(java.security.MessageDigest.getInstance("SHA-256").digest(media))),"Validate the downloaded original hash independently");
                 MediaItem foreign=new MediaItem(new URL("http://unrelated.invalid/ccapi/ver140/contents/card1/DCIM/foreign.JPG"));
-                try{session.originalHeader(foreign,65536);throw new AssertionError("Foreign metadata origin accepted");}catch(IOException expected){check(true,"Reject foreign-origin original metadata probes before connecting");}
                 try{session.save(foreign,new ByteArrayOutputStream(),()->false,(n,total)->{});throw new AssertionError("Foreign original origin accepted");}catch(IOException expected){check(true,"Reject foreign-origin original transfers before sending credentials");}
-                byte[] header=session.originalHeader(original,65536);check(header.length==65536&&Arrays.equals(header,Arrays.copyOf(media,65536)),"Bound metadata probing even when the camera ignores Range");
                 try{session.save(original,new ByteArrayOutputStream(),()->true,(done,total)->{});throw new AssertionError("Cancelled save succeeded");}catch(IOException expected){check(true,"Abort original download when cancelled");}
             }
             try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/wrong.MP4"),URL::openConnection,"","",new File(directory,"wrong.cache"),s->{})){

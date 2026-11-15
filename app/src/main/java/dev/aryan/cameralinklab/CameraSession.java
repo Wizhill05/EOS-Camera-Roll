@@ -22,7 +22,7 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
         this.network=network;this.user=user;this.password=password;this.log=log;identity="address:"+root.getHost();
     }
     @Override public void cameraIdentity(String identity){this.identity=identity;}
-    String key(MediaItem item){return MediaKey.of(identity,item.url.getPath());}
+    String key(MediaItem item){return item.keyFor(identity);}
     CameraHttp.Opener opener(){return url->network==null?url.openConnection():network.openConnection(url);}
     CameraHttp client()throws IOException {
         if(closed)throw new IOException("Camera disconnected");
@@ -40,16 +40,6 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
         CameraHttp client=client();
         try{HttpURLConnection c=client.get(url);try(InputStream in=c.getInputStream()){return CameraHttp.readBounded(in,maximum);}finally{c.disconnect();}}
         finally{clients.remove(client);client.close();}
-    }
-    byte[] originalHeader(MediaItem item,int maximum)throws IOException {
-        if(!CameraHttp.sameOrigin(root,item.url))throw new IOException("Invalid camera origin");
-        CameraHttp client=client();try{
-            HttpURLConnection connection=client.request(item.url,Collections.singletonMap("Range","bytes=0-"+(maximum-1)),true);
-            try(InputStream in=connection.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
-                if(connection.getResponseCode()==206){String range=connection.getHeaderField("Content-Range");if(range==null||!range.startsWith("bytes 0-"))throw new IOException("Invalid image metadata range");}
-                byte[] buffer=new byte[8192];int count;while(out.size()<maximum&&(count=in.read(buffer,0,Math.min(buffer.length,maximum-out.size())))!=-1)out.write(buffer,0,count);return out.toByteArray();
-            }finally{connection.disconnect();}
-        }finally{clients.remove(client);client.close();}
     }
     SaveResult save(MediaItem item,OutputStream out,BooleanSupplier cancelled,BiConsumer<Long,Long> progress)throws IOException {
         if(!CameraHttp.sameOrigin(root,item.url))throw new IOException("Invalid camera origin");

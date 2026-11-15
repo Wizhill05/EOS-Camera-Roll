@@ -9,6 +9,8 @@ final class MediaItem {
     final URL url;
     final String name, folder, extension;
     final boolean video;
+    private String keyCamera,key;
+    synchronized String keyFor(String camera){if(!camera.equals(keyCamera)){key=MediaKey.of(camera,url.getPath());keyCamera=camera;}return key;}
 
     MediaItem(URL url) {
         this.url = url;

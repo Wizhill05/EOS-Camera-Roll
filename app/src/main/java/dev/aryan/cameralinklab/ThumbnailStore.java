@@ -18,7 +18,7 @@ final class ThumbnailStore {
     }
     float ratio(String key){int width=meta.getInt("w_"+key,0),height=meta.getInt("h_"+key,0);return width>0&&height>0?width/(float)height:1.25f;}
     int orientation(String key){return meta.getInt("o_"+key,0);}
-    void orientation(String key,int orientation){if(orientation>0)meta.edit().putInt("o_"+key,orientation).apply();}
+    void orientation(String key,int orientation){meta.edit().putInt("o_"+key,orientation).apply();}
     String revision(String key){return meta.getString("r_"+key,"");}
     void revision(String key,String revision){meta.edit().putString("r_"+key,revision).apply();}
     static String revision(JSONObject info){return info.optString("filesize","")+":"+info.optString("lastmodifieddate",info.optString("datetime",""))+":"+info.optString("rotate",info.optString("rotation",""));}

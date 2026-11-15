@@ -15,6 +15,7 @@ final class CameraHttp implements AutoCloseable {
     private final Consumer<String> trace;
     private volatile HttpURLConnection active;
     private volatile boolean cancelled;
+    private int connectTimeout=8000,readTimeout=20000;
 
     CameraHttp(Opener opener, String username, String password) {
         this(opener, username, password, ignored -> {});
@@ -24,6 +25,8 @@ final class CameraHttp implements AutoCloseable {
         this.opener = opener; this.username = username; this.password = password;
         this.trace = trace;
     }
+
+    CameraHttp timeouts(int connect,int read){if(connect<=0||read<=0)throw new IllegalArgumentException("Timeout must be positive");connectTimeout=connect;readTimeout=read;return this;}
 
     static URL url(String text) throws IOException {
         URL u = new URL(text.trim());
@@ -102,7 +105,7 @@ final class CameraHttp implements AutoCloseable {
         HttpURLConnection c = (HttpURLConnection)opener.open(url);
         active = c;
         if (cancelled) { c.disconnect(); throw new IOException("Cancelled"); }
-        c.setConnectTimeout(8000); c.setReadTimeout(20000);
+        c.setConnectTimeout(connectTimeout); c.setReadTimeout(readTimeout);
         c.setInstanceFollowRedirects(false); c.setUseCaches(false);
         c.setRequestMethod("GET"); c.setRequestProperty("Accept-Encoding", "identity");
         for (Map.Entry<String,String> header : headers.entrySet()) c.setRequestProperty(header.getKey(), header.getValue());

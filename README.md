@@ -22,6 +22,8 @@ These are rendered Android test screens using crops of a public-domain EOS R50 V
 5. Tap a photo to inspect it. Hold a tile to select a batch. Set stars in the viewer or selection bar. Choose a minimum rating in Filters, then save that view from the download sheet.
 6. Choose a writable download folder once. Save uses that folder afterward. Copy card makes a new timestamped folder. Green checks identify completed original downloads.
 
+Browsing fetches small thumbnails for the current gallery area, with one bounded worker. It never requests original files to build the grid. Cached thumbnails are reused without per-file network revalidation. Optional small rotation metadata runs after thumbnail work; opening a photo is what loads its full-resolution original.
+
 The app distinguishes a missing device address, an unreachable camera, authentication/access rejection, partial scans, a connected empty card and an empty filter. Cached photos remain visible when refreshing fails.
 
 ## Originals and Lightroom

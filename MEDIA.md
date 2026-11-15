@@ -1,4 +1,4 @@
-# EOS Camera Roll 0.6.1
+# EOS Camera Roll 0.6.2
 
 An Android app for browsing, culling and copying original photos and recorded videos from the Canon EOS R50 V over CCAPI. Install this APK over the existing Camera Link Lab / EOS Camera Roll app. It uses the same package and development signing certificate. Do not uninstall first if you want to keep connection preferences and local ratings.
 
@@ -12,13 +12,21 @@ The library discovers the camera's advertised contents API, including the develo
 
 The library uses rounded two-column photo tiles, a red accent, and floating Library / Rated / Saved navigation. Folder and rating filters are in the filter sheet; saving and card copy are in the red download button’s sheet. Dark mode is the default. Library options offer Dark, Light and System appearance. The gallery has All / Photos / Videos, a camera-folder selector, and a minimum-star filter. Filename labels and sorting are in the options menu.
 
-The last successful library and normalized thumbnails are cached across restarts. Press Refresh to reconnect; a failed connection retains the cached library and is shown separately from an empty card. Portrait thumbnails use embedded EXIF, Canon rotation metadata or a bounded original EXIF probe, including CR3 CMT1 metadata, and are stored upright on disk.
+The last successful library and normalized thumbnails are cached across restarts. Press Refresh to reconnect; a failed connection retains the cached library and is shown separately from an empty card. Thumbnails are shown before optional rotation metadata. Browsing never probes or downloads original files. Rotation uses embedded thumbnail EXIF or small camera metadata, and normalized thumbnails are cached on disk. If the camera omits both, opening the photo loads its original on demand and updates the cached thumbnail with the correctly rendered image.
 
 Tap a thumbnail to open it. The viewer has previous/next, Save, file information, and a 1–5 star bar. Tap the selected rating again to clear it. Hold a grid item to select multiple items, then rate or save the selection. Ratings are local to EOS Camera Roll; they do not modify camera files, EXIF, XMP, or Lightroom ratings.
 
 To save everything rated at least four stars, choose a minimum of four stars in Filters, then open the download sheet and choose Save this view. Photos/Videos and the folder filter also apply to Save view. Copy card ignores the view filters and offers all photos, all videos, or both in a new timestamped folder.
 
 Ratings and saved receipts use the camera's reported serial number when available, plus the card path independent of the CCAPI version. When the camera does not expose its identity, the camera address is the fallback. Reusing the same card paths after formatting/replacing files can reuse these local labels. A rating is not a content fingerprint.
+
+## Gallery request policy
+
+A cached thumbnail is returned without a camera request, including after refresh or process restart. An uncached tile requests `kind=thumbnail`; optional small `kind=info` JSON is lower priority, bounded to 64 KiB with short timeouts, and skipped after the camera reports no rotation for that format or a metadata request fails. No original/header or display-image GET is issued by grid browsing. Full originals and display previews are requested only for a photo that is opened, saved or sent to Lightroom. Recorded videos are streamed only after Play.
+
+One gallery worker handles network requests, with at most 16 waiting jobs. Thumbnail jobs precede metadata. Recycled tiles are skipped and stale queued work is discarded during scrolling, pausing, refresh, backgrounding and transfers. Opening the viewer cancels grid requests. Thumbnail completion updates one indexed row instead of rehashing/scanning the entire library.
+
+Refresh re-enumerates the camera library and reuses existing thumbnail images; it does not revalidate every cached file. If a camera file is replaced or rotated at the same path, opening that photo updates its cached thumbnail. Existing star ratings, download receipts and destination permissions remain independent of this disposable image cache.
 
 ## Full-resolution photos
 
