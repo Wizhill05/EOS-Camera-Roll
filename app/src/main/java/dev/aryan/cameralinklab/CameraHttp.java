@@ -6,10 +6,12 @@ import java.nio.charset.StandardCharsets;
 import java.security.*;
 import java.util.*;
 import java.util.regex.*;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 
 final class CameraHttp implements AutoCloseable {
     interface Opener { URLConnection open(URL url) throws IOException; }
+    private static final ExecutorService cancellations=Executors.newCachedThreadPool(task->{Thread thread=new Thread(task,"camera-disconnect");thread.setDaemon(true);return thread;});
     private final Opener opener;
     private final String username, password;
     private final Consumer<String> trace;
@@ -50,6 +52,7 @@ final class CameraHttp implements AutoCloseable {
         trace.accept("REQUEST: GET " + url.getPath());
         HttpURLConnection c = open(url, null, headers);
         int status = c.getResponseCode();
+        ensureActive(c);
         trace.accept("HTTP: initial response " + status);
         if (status == 401) {
             String challenge = c.getHeaderField("WWW-Authenticate");
@@ -61,6 +64,7 @@ final class CameraHttp implements AutoCloseable {
             trace.accept("AUTH: sending " + (authorization.startsWith("Digest") ? "Digest" : "Basic") + " response. Credentials and authorization header are excluded from this log.");
             c = open(url, authorization, headers);
             status = c.getResponseCode();
+            ensureActive(c);
             trace.accept("AUTH: authenticated response " + status);
             if (status == 401) trace.accept("AUTH: rejection challenge: " + challengeSummary(c.getHeaderField("WWW-Authenticate")));
         }
@@ -161,5 +165,7 @@ final class CameraHttp implements AutoCloseable {
         catch (NoSuchAlgorithmException e) { throw new IOException(e); }
     }
     static String hex(byte[] b) { StringBuilder s=new StringBuilder(); for(byte v:b)s.append(String.format(Locale.US,"%02x",v & 255));return s.toString(); }
+    private void ensureActive(HttpURLConnection connection)throws IOException{if(cancelled){connection.disconnect();throw new IOException("Cancelled");}}
+    void cancel(){cancelled=true;HttpURLConnection connection=active;if(connection!=null)cancellations.execute(connection::disconnect);}
     @Override public void close() { cancelled=true; HttpURLConnection c=active;if(c!=null)c.disconnect(); }
 }

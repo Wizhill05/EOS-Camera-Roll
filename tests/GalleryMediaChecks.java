@@ -12,7 +12,7 @@ public final class GalleryMediaChecks {
     private static int checks;
     private static void check(boolean value,String name){if(!value)throw new AssertionError(name);checks++;System.out.println("PASS "+name);}
     private static Object json(String value){return new JSONTokener(value).nextValue();}
-    public static void main(String[] args)throws Exception {catalog();partialCatalog();culling();orientationAndIssues();streaming();System.out.println("All "+checks+" media checks passed.");}
+    public static void main(String[] args)throws Exception {catalog();partialCatalog();culling();orientationAndIssues();streaming();videoCancellation();System.out.println("All "+checks+" media checks passed.");}
     private static final String PREFIX="/ccapi/ver140/contents";
     private static final String PHOTOS=PREFIX+"/card1/DCIM/100CANON";
     private static final String VIDEOS=PREFIX+"/card1/XFVC/REEL_0011";
@@ -82,18 +82,21 @@ public final class GalleryMediaChecks {
         server.createContext("/ccapi/huge.MP4",exchange->{String[] range=exchange.getRequestHeaders().getFirst("Range").substring(6).split("-");long start=Long.parseLong(range[0]),end=Math.min(7_999_999_999L,Long.parseLong(range[1]));byte[] chunk=new byte[(int)(end-start+1)];for(int i=0;i<chunk.length;i++)chunk[i]=(byte)((start+i)%251);exchange.getResponseHeaders().set("Content-Range","bytes "+start+"-"+end+"/8000000000");exchange.sendResponseHeaders(206,chunk.length);exchange.getResponseBody().write(chunk);exchange.close();});
         server.start();File directory=Files.createTempDirectory("camera-media-check").toFile();String origin="http://127.0.0.1:"+server.getAddress().getPort();
         try{
-            File rangeTemp=new File(directory,"range.cache");try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/range.MP4"),URL::openConnection,"","",rangeTemp,s->{})){
+            File rangeTemp=new File(directory,"range.cache");try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/range.MP4"),URL::openConnection,"","",s->{})){
                 source.prepare();check(source.supportsRanges()&&source.size()==media.length,"Recognize validated camera byte ranges");
                 byte[] chunk=new byte[1500];int read=source.readAt(900000,chunk,0,chunk.length);check(read==chunk.length&&Arrays.equals(chunk,Arrays.copyOfRange(media,900000,901500)),"Seek to uncached position with exact byte fidelity");
                 int requests=rangeRequests.get();source.readAt(901000,chunk,0,100);check(rangeRequests.get()==requests,"Reuse cached range for adjacent reads");
+                source.readAt(0,chunk,0,100);source.readAt(901000,chunk,0,100);check(rangeRequests.get()==requests+1,"Retain header and tail blocks when the decoder switches between them");
                 check(source.readAt(media.length,chunk,0,1)==-1,"Return EOF at file boundary");
             }check(!rangeTemp.exists(),"Avoid full-file disk cache with byte ranges");
-            try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/huge.MP4"),URL::openConnection,"","",new File(directory,"huge.cache"),s->{})){
+            try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/huge.MP4"),URL::openConnection,"","",s->{})){
                 source.prepare();byte[] bytes=new byte[2048];long offset=5_000_000_123L;int count=source.readAt(offset,bytes,0,bytes.length);boolean correct=count==bytes.length&&source.size()==8_000_000_000L;for(int i=0;i<count;i++)correct&=bytes[i]==(byte)((offset+i)%251);check(correct,"Preserve video sizes and seek offsets above 4 GiB");
+                boolean limited=false;for(int i=0;i<40;i++){try{source.readAt(i*262144L,bytes,0,1);}catch(IOException error){limited=error.getMessage().contains("streaming limit");break;}}
+                check(limited,"Cap camera reads before the first video frame instead of buffering indefinitely");source.playbackStarted();check(source.readAt(40*262144L,bytes,0,1)==1,"Allow continued on-demand playback after the first frame");
             }
-            File spool=new File(directory,"spool.cache");try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/sequential.MP4"),URL::openConnection,"","",spool,s->{})){
-                source.prepare();byte[] chunk=new byte[1000];int read=source.readAt(1100000,chunk,0,chunk.length);check(!source.supportsRanges()&&read==1000&&Arrays.equals(chunk,Arrays.copyOfRange(media,1100000,1101000)),"Read correct bytes from sequential fallback without appending a full response as a range");
-            }check(!spool.exists(),"Remove temporary playback cache on close");
+            File spool=new File(directory,"spool.cache");try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/sequential.MP4"),URL::openConnection,"","",s->{})){
+                try{source.prepare();throw new AssertionError("Ignored Range started streaming");}catch(IOException expected){check(expected.getMessage().contains("Download & play"),"Refuse ignored ranges instead of silently downloading the entire video");}
+            }check(!spool.exists(),"Never create a sequential video spool");
             try(CameraSession session=new CameraSession(new URL(origin+"/ccapi"),null,"","",s->{})){
                 MediaItem original=new MediaItem(new URL(origin+PREFIX+"/card1/XFVC/clip.MP4"));
                 server.createContext(PREFIX+"/card1/XFVC/clip.MP4",exchange->{exchange.sendResponseHeaders(200,media.length);try{exchange.getResponseBody().write(media);}finally{exchange.close();}});
@@ -104,9 +107,39 @@ public final class GalleryMediaChecks {
                 try{session.save(foreign,new ByteArrayOutputStream(),()->false,(n,total)->{});throw new AssertionError("Foreign original origin accepted");}catch(IOException expected){check(true,"Reject foreign-origin original transfers before sending credentials");}
                 try{session.save(original,new ByteArrayOutputStream(),()->true,(done,total)->{});throw new AssertionError("Cancelled save succeeded");}catch(IOException expected){check(true,"Abort original download when cancelled");}
             }
-            try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/wrong.MP4"),URL::openConnection,"","",new File(directory,"wrong.cache"),s->{})){
+            try(RemoteMediaFile source=new RemoteMediaFile(new URL(origin+"/ccapi/wrong.MP4"),URL::openConnection,"","",s->{})){
                 try{source.prepare();throw new AssertionError("Wrong Content-Range accepted");}catch(IOException expected){check(true,"Reject mismatched video byte range");}
             }
         }finally{server.stop(0);File[] files=directory.listFiles();if(files!=null)for(File f:files)f.delete();directory.delete();}
     }
+    private static void videoCancellation()throws Exception{
+        AtomicInteger opens=new AtomicInteger(),bodyReads=new AtomicInteger();URL url=new URL("http://camera/ccapi/test.MP4");
+        CameraHttp.Opener ignoresRange=target->{opens.incrementAndGet();return new HttpURLConnection(target){
+            public void connect(){}public void disconnect(){}public boolean usingProxy(){return false;}
+            public int getResponseCode(){return 200;}
+            public InputStream getInputStream(){bodyReads.incrementAndGet();return new ByteArrayInputStream(new byte[1024*1024]);}
+        };};
+        RemoteMediaFile refused=new RemoteMediaFile(url,ignoresRange,"","",text->{});
+        try{refused.prepare();throw new AssertionError("Ignored Range accepted");}catch(IOException expected){}finally{refused.close();}
+        check(opens.get()==1&&bodyReads.get()==0,"Do not read a single full-response body when the camera ignores Range");
+        java.util.concurrent.CountDownLatch reading=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
+        CameraHttp.Opener stalled=target->{opens.incrementAndGet();return new HttpURLConnection(target){
+            public void connect(){}public boolean usingProxy(){return false;}
+            public void disconnect(){if(getRequestProperty("Range").equals("bytes=0-0"))return;try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}}
+            public int getResponseCode(){return 206;}
+            public String getHeaderField(String name){if(!name.equals("Content-Range"))return null;String range=getRequestProperty("Range");return "bytes "+range.substring(6)+"/1000000";}
+            public InputStream getInputStream(){if(getRequestProperty("Range").equals("bytes=0-0"))return new ByteArrayInputStream(new byte[1]);return new InputStream(){public int read()throws IOException{reading.countDown();try{release.await();}catch(InterruptedException e){throw new IOException(e);}return -1;}};}
+        };};
+        RemoteMediaFile source=new RemoteMediaFile(url,stalled,"","",text->{});source.prepare();
+        java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try{
+            java.util.concurrent.Future<Boolean> read=worker.submit(()->{try{source.readAt(400000,new byte[16],0,16);return false;}catch(IOException expected){return true;}});
+            check(reading.await(2,java.util.concurrent.TimeUnit.SECONDS),"Exercise cancellation during an active video response");
+            long start=System.nanoTime();source.close();check(System.nanoTime()-start<250_000_000L,"Closing a stalled video does not wait for socket disconnect or decoder reads");
+            release.countDown();check(read.get(2,java.util.concurrent.TimeUnit.SECONDS),"An in-flight read terminates after video cancellation");
+            int before=opens.get();try{source.readAt(0,new byte[1],0,1);throw new AssertionError("Read after close");}catch(IOException expected){}
+            check(opens.get()==before,"A closed stream cannot open another camera connection");
+        }finally{release.countDown();source.close();worker.shutdownNow();}
+    }
+
 }

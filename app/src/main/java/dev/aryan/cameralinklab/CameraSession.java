@@ -56,7 +56,7 @@ final class CameraSession implements AutoCloseable, MediaCatalog.Transport {
             }finally{c.disconnect();}
         }finally{clients.remove(client);client.close();}
     }
-    void cancelRequests(){for(CameraHttp c:clients)c.close();}
+    void cancelRequests(){for(CameraHttp c:clients)c.cancel();}
     @Override public void close(){closed=true;cancelRequests();}
     static final class SaveResult{final long bytes;final String hash;SaveResult(long bytes,String hash){this.bytes=bytes;this.hash=hash;}}
 }

@@ -6,96 +6,66 @@ import java.util.*;
 import java.util.function.Consumer;
 import java.util.regex.*;
 
-/** Seekable byte access when the camera supports Range; sequential disk buffering otherwise. */
+/** Bounded, seekable camera access. A server that ignores ranges is never spooled. */
 final class RemoteMediaFile implements Closeable {
-    private static final int BLOCK=256*1024;
+    private static final int BLOCK=256*1024, CACHE_BLOCKS=8;
+    private static final long STARTUP_BYTES=8L*1024*1024, STARTUP_NANOS=12_000_000_000L;
     private final URL url;
     private final CameraHttp.Opener opener;
     private final String user,password;
     private final Consumer<String> log;
-    private final File temporary;
-    private final Object monitor=new Object();
-    private volatile boolean closed;
-    private volatile IOException failure;
-    private volatile CameraHttp active;
-    private volatile long length=-1,available;
-    private volatile boolean complete;
-    private boolean ranges;
-    private long blockStart=-1;
-    private byte[] block;
-    private RandomAccessFile reader;
+    private final Object requestLock=new Object();
+    private final Map<Long,byte[]> blocks=new LinkedHashMap<Long,byte[]>(CACHE_BLOCKS,.75f,true){
+        @Override protected boolean removeEldestEntry(Map.Entry<Long,byte[]> entry){return size()>CACHE_BLOCKS;}
+    };
+    private volatile boolean closed,playing;
+    private volatile long length=-1;
+    private CameraHttp active;
+    private long startupAt,requested;
 
-    RemoteMediaFile(URL url,CameraHttp.Opener opener,String user,String password,File temporary,Consumer<String> log){
-        this.url=url;this.opener=opener;this.user=user;this.password=password;this.temporary=temporary;this.log=log;
+    RemoteMediaFile(URL url,CameraHttp.Opener opener,String user,String password,Consumer<String> log){
+        this.url=url;this.opener=opener;this.user=user;this.password=password;this.log=log;
     }
-    void prepare()throws IOException {
-        CameraHttp client=new CameraHttp(opener,user,password);active=client;
-        HttpURLConnection connection=null;
-        try{
-            ensureOpen();connection=client.request(url,Collections.singletonMap("Range","bytes=0-"+(BLOCK-1)),true);
-            if(connection.getResponseCode()==206){
-                long[] interval=parseRange(connection.getHeaderField("Content-Range"),0,BLOCK);
-                length=interval[2];block=CameraHttp.readBounded(connection.getInputStream(),BLOCK);
-                if(block.length!=interval[1]+1)throw new IOException("Camera returned an incomplete video range");
-                blockStart=0;ranges=true;log.accept("Video byte ranges supported; seeking is available.");
-                connection.disconnect();client.close();active=null;
-            }else{
-                length=connection.getContentLengthLong();
-                if(length>0&&length>temporary.getParentFile().getUsableSpace()-64*1024*1024L)
-                    throw new IOException("Not enough phone storage to buffer this video. The camera does not support byte-range playback.");
-                reader=new RandomAccessFile(temporary,"rw");
-                HttpURLConnection response=connection;
-                log.accept("Camera ignored byte ranges. Buffering video to temporary storage; seeking may wait for data.");
-                Thread spool=new Thread(()->spool(client,response),"camera-video-buffer");spool.setDaemon(true);spool.start();
-            }
-        }catch(IOException|RuntimeException e){if(connection!=null)connection.disconnect();client.close();active=null;throw e;}
-    }
-
-    private void spool(CameraHttp client,HttpURLConnection response){
-        try(InputStream in=response.getInputStream();RandomAccessFile writer=new RandomAccessFile(temporary,"rw")){
-            byte[] bytes=new byte[65536];int n;long total=0;
-            while((n=in.read(bytes))!=-1){ensureOpen();writer.write(bytes,0,n);total+=n;synchronized(monitor){available=total;monitor.notifyAll();}}
-            if(length>=0&&length!=total)throw new IOException("Video buffer is incomplete");
-            synchronized(monitor){length=total;complete=true;monitor.notifyAll();}
-        }catch(IOException e){if(!closed)failure=e;synchronized(monitor){monitor.notifyAll();}}
-        finally{response.disconnect();client.close();active=null;if(closed)temporary.delete();}
+    synchronized void prepare()throws IOException {
+        ensureOpen();startupAt=System.nanoTime();
+        fetch(0,0);
+        log.accept("Video byte ranges validated; playback uses bounded on-demand reads.");
     }
     long size(){return length;}
-    long buffered(){return ranges?-1:available;}
-    boolean supportsRanges(){return ranges;}
+    boolean supportsRanges(){return length>0;}
+    void playbackStarted(){playing=true;}
 
-    int readAt(long position,byte[] buffer,int offset,int count)throws IOException {
+    synchronized int readAt(long position,byte[] buffer,int offset,int count)throws IOException {
         if(position<0||offset<0||count<0||offset>buffer.length-count)throw new IOException("Invalid video read");
-        ensureOpen();if(count==0)return 0;if(length>=0&&position>=length)return -1;
-        if(ranges)return rangeRead(position,buffer,offset,count);
-        long deadline=System.nanoTime()+120_000_000_000L;
-        synchronized(monitor){
-            while(position>=available&&!complete&&failure==null&&!closed){
-                if(System.nanoTime()>deadline)throw new IOException("Video is still buffering. Save the original to play it locally.");
-                try{monitor.wait(500);}catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("Video cancelled",e);}
-            }
-            ensureOpen();if(failure!=null)throw failure;if(position>=available)return -1;
-            reader.seek(position);return reader.read(buffer,offset,(int)Math.min(count,available-position));
-        }
+        ensureOpen();if(length<0)throw new IOException("Video is not prepared");
+        if(count==0)return 0;if(position>=length)return -1;
+        long start=position-position%BLOCK;byte[] block=blocks.get(start);
+        if(block==null){block=fetch(start,Math.min(length-1,start+BLOCK-1));blocks.put(start,block);}
+        int available=(int)Math.min(count,block.length-(position-start));
+        System.arraycopy(block,(int)(position-start),buffer,offset,available);return available;
     }
-    private synchronized int rangeRead(long position,byte[] buffer,int offset,int count)throws IOException {
-        if(block==null||position<blockStart||position>=blockStart+block.length){
-            CameraHttp client=new CameraHttp(opener,user,password);active=client;
-            try{
-                ensureOpen();long end=position+Math.min(BLOCK,length-position)-1;
-                HttpURLConnection c=client.request(url,Collections.singletonMap("Range","bytes="+position+"-"+end),true);
-                try{
-                    if(c.getResponseCode()!=206)throw new IOException("Camera stopped honoring video byte ranges");
-                    long[] interval=parseRange(c.getHeaderField("Content-Range"),position,BLOCK);
-                    if(interval[2]!=length)throw new IOException("The video changed during playback");
-                    byte[] bytes=CameraHttp.readBounded(c.getInputStream(),BLOCK);
-                    if(bytes.length!=interval[1]-interval[0]+1)throw new IOException("Truncated video byte range");
-                    block=bytes;blockStart=position;
-                }finally{c.disconnect();}
-            }finally{client.close();active=null;}
+    private byte[] fetch(long start,long end)throws IOException {
+        ensureOpen();long size=end-start+1;
+        if(!playing&&(requested+size>STARTUP_BYTES||System.nanoTime()-startupAt>STARTUP_NANOS))
+            throw new IOException("Video did not start within the streaming limit. Download & play instead.");
+        requested+=size;
+        CameraHttp client=new CameraHttp(opener,user,password).timeouts(2000,3000);
+        synchronized(requestLock){ensureOpen();active=client;}
+        HttpURLConnection response=null;
+        try{
+            Map<String,String> headers=new HashMap<>();headers.put("Range","bytes="+start+"-"+end);headers.put("Connection","close");
+            response=client.request(url,headers,true);ensureOpen();
+            if(response.getResponseCode()!=206)throw new IOException("Camera does not support seekable streaming. Download & play instead.");
+            long[] interval=parseRange(response.getHeaderField("Content-Range"),start,(int)size);
+            if(interval[1]!=end)throw new IOException("Camera returned an incomplete video range");
+            if(length>=0&&interval[2]!=length)throw new IOException("The video changed during playback");
+            byte[] bytes=CameraHttp.readBounded(response.getInputStream(),(int)size);ensureOpen();
+            if(bytes.length!=size)throw new IOException("Truncated video byte range");
+            length=interval[2];return bytes;
+        }finally{
+            if(response!=null)response.disconnect();client.close();
+            synchronized(requestLock){if(active==client)active=null;}
         }
-        int available=(int)Math.min(count,block.length-(position-blockStart));
-        System.arraycopy(block,(int)(position-blockStart),buffer,offset,available);return available;
     }
     static long[] parseRange(String header,long expectedStart,int maximum)throws IOException {
         if(header==null)throw new IOException("Camera omitted Content-Range");
@@ -109,8 +79,6 @@ final class RemoteMediaFile implements Closeable {
     }
     private void ensureOpen()throws IOException{if(closed)throw new IOException("Video closed");}
     @Override public void close(){
-        closed=true;CameraHttp client=active;if(client!=null)client.close();
-        synchronized(monitor){monitor.notifyAll();if(reader!=null)try{reader.close();}catch(IOException ignored){}}
-        temporary.delete();
+        synchronized(requestLock){closed=true;if(active!=null)active.cancel();}
     }
 }

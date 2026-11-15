@@ -38,6 +38,7 @@ final class GalleryImages implements AutoCloseable {
     volatile boolean closed,networkEnabled=true;
     private volatile int previewGeneration;
     private volatile long rawJob;
+    private volatile CameraSession previewSession;
     GalleryImages(Context context,CameraSession session,Runnable changed){this(context,session,key->changed.run());}
     GalleryImages(Context context,CameraSession session,Consumer<String> changed){this.context=context.getApplicationContext();this.session=session;this.changed=changed;disk=new ThumbnailStore(context);}
     float ratio(MediaItem item){return disk.ratio(session.key(item));}
@@ -111,16 +112,19 @@ final class GalleryImages implements AutoCloseable {
 
     void preview(MediaItem item,Consumer<Bitmap> loaded,Consumer<String> note,BiConsumer<Long,Long> progress){
         cancelPreview();final int token=previewGeneration;String key=session.key(item);Bitmap hit=cache.get(key);if(hit!=null)loaded.accept(hit);
+        final CameraSession previewSource;
+        try{previewSource=new CameraSession(session.root,session.network,session.user,session.password,session.log);previewSource.identity=session.identity;previewSession=previewSource;}
+        catch(IOException error){note.accept(error.getMessage());return;}
         previews.execute(()->{
             BooleanSupplier cancelled=()->closed||token!=previewGeneration;
             try{
                 Bitmap saved=disk.read(key);if(saved!=null)main.post(()->{if(!cancelled.getAsBoolean())loaded.accept(saved);});
                 if(cancelled.getAsBoolean())return;
+                if(item.video)return;
                 if(networkEnabled){
-                    try{Bitmap quick=decode(session.bytes(MediaCatalog.query(item.url,item.video?"kind=thumbnail":"kind=display"),32*1024*1024),2560,disk.orientation(key));main.post(()->{if(!cancelled.getAsBoolean()){loaded.accept(quick);note.accept(item.video?"Ready to play":"Preview");}});}catch(IOException ignored){}
+                    try{Bitmap quick=decode(previewSource.bytes(MediaCatalog.query(item.url,"kind=display"),32*1024*1024),2560,disk.orientation(key));main.post(()->{if(!cancelled.getAsBoolean()){loaded.accept(quick);note.accept("Preview");}});}catch(IOException ignored){}
                 }
-                if(item.video){if(!networkEnabled)main.post(()->{if(!cancelled.getAsBoolean())note.accept("Refresh to reconnect and play this video");});return;}
-                File original=networkEnabled?OriginalCache.obtain(context,session,item,cancelled,(n,total)->main.post(()->{if(!cancelled.getAsBoolean())progress.accept(n,total);})):OriginalCache.existing(context,session,item);
+                File original=networkEnabled?OriginalCache.obtain(context,previewSource,item,cancelled,(n,total)->main.post(()->{if(!cancelled.getAsBoolean())progress.accept(n,total);})):OriginalCache.existing(context,session,item);
                 if(original==null)throw new IOException("Refresh to reconnect for the original");
                 if(cancelled.getAsBoolean())return;cache.evictAll();Bitmap full;
                 if(item.raw()){
@@ -134,9 +138,10 @@ final class GalleryImages implements AutoCloseable {
                 }
                 Bitmap rendered=full;try{rememberPreview(item,rendered,original);}catch(IOException cacheError){session.log.accept("Could not cache the opened photo thumbnail");}main.post(()->{if(!cancelled.getAsBoolean()){loaded.accept(rendered);note.accept("Full resolution  "+rendered.getWidth()+" × "+rendered.getHeight());progress.accept(-1L,-1L);}else rendered.recycle();});
             }catch(Exception|OutOfMemoryError error){main.post(()->{if(!cancelled.getAsBoolean()){note.accept("Preview only • "+(error instanceof OutOfMemoryError?"Not enough memory":error.getMessage()));progress.accept(-1L,-1L);}});}
+            finally{previewSource.close();if(previewSession==previewSource)previewSession=null;}
         });
     }
-    void cancelPreview(){previewGeneration++;if(rawJob>0)RawRenderer.cancel(rawJob);}
+    void cancelPreview(){previewGeneration++;CameraSession source=previewSession;previewSession=null;if(source!=null)source.close();if(rawJob>0)RawRenderer.cancel(rawJob);}
     static Bitmap orient(Bitmap bitmap,int orientation){
         Matrix matrix=new Matrix();switch(orientation){case 2:matrix.setScale(-1,1);break;case 3:matrix.setRotate(180);break;case 4:matrix.setScale(1,-1);break;case 5:matrix.setRotate(90);matrix.postScale(-1,1);break;case 6:matrix.setRotate(90);break;case 7:matrix.setRotate(270);matrix.postScale(-1,1);break;case 8:matrix.setRotate(270);break;default:return bitmap;}
         Bitmap rotated=Bitmap.createBitmap(bitmap,0,0,bitmap.getWidth(),bitmap.getHeight(),matrix,true);if(rotated!=bitmap)bitmap.recycle();return rotated;

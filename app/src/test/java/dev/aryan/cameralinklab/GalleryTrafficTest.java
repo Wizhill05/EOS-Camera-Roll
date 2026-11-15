@@ -41,6 +41,14 @@ public class GalleryTrafficTest {
         assertTrue("Thumbnail jobs must run before optional metadata",server.targets.subList(0,4).stream().allMatch(path->path.contains("kind=thumbnail")));
         assertTrue(server.targets.toString(),server.targets.stream().allMatch(path->path.contains("kind=thumbnail")||path.contains("kind=info")));
     }
+    @Test public void cancellingPhotoPreviewPreventsFollowupOriginalDownload()throws Exception{
+        server.displayGate=new java.util.concurrent.CountDownLatch(1);images.preview(item(0),bitmap->{},note->{},(done,total)->{});
+        try{waitFor(()->server.targets.stream().anyMatch(path->path.contains("kind=display")));images.cancelPreview();server.displayGate.countDown();
+            Field executor=GalleryImages.class.getDeclaredField("previews");executor.setAccessible(true);((java.util.concurrent.ExecutorService)executor.get(images)).submit(()->{}).get(5,java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals("A cancelled preview must not start an original or metadata request",1,server.requests.get());
+            ImageView next=new ImageView(context);images.thumbnail(item(1),next);waitFor(()->loaded(next));
+        }finally{server.displayGate.countDown();}
+    }
     @Test public void refreshAndRebindReuseCacheWithoutCameraRequests()throws Exception{
         MediaItem item=item(0);ImageView first=new ImageView(context);images.thumbnail(item,first);waitFor(()->loaded(first));idle();int initial=server.requests.get();images.refresh();ImageView rebound=new ImageView(context);images.thumbnail(item,rebound);waitFor(()->loaded(rebound));idle();assertEquals("A cached thumbnail must not trigger metadata revalidation",initial,server.requests.get());
         images.close();images=new GalleryImages(context,session,()->{});ImageView restarted=new ImageView(context);images.thumbnail(item,restarted);waitFor(()->loaded(restarted));idle();assertEquals("The persisted thumbnail must work without another request",initial,server.requests.get());

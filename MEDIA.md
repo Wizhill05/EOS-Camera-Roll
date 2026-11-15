@@ -1,4 +1,4 @@
-# EOS Camera Roll 0.6.2
+# EOS Camera Roll 0.6.3
 
 An Android app for browsing, culling and copying original photos and recorded videos from the Canon EOS R50 V over CCAPI. Install this APK over the existing Camera Link Lab / EOS Camera Roll app. It uses the same package and development signing certificate. Do not uninstall first if you want to keep connection preferences and local ratings.
 
@@ -10,7 +10,7 @@ The library discovers the camera's advertised contents API, including the develo
 
 ## Browse and cull
 
-The library uses rounded two-column photo tiles, a red accent, and floating Library / Rated / Saved navigation. Folder and rating filters are in the filter sheet; saving and card copy are in the red download button’s sheet. Dark mode is the default. Library options offer Dark, Light and System appearance. The gallery has All / Photos / Videos, a camera-folder selector, and a minimum-star filter. Filename labels and sorting are in the options menu.
+The library uses three-column square photo tiles with subtle corners, a red accent, and floating Library / Rated / Saved navigation. Folder and rating filters are in the filter sheet; saving and card copy are in the red download button’s sheet. Dark mode is the default. Library options offer Dark, Light and System appearance. The gallery has All / Photos / Videos, a camera-folder selector, and a minimum-star filter. Filename labels and sorting are in the options menu.
 
 The last successful library and normalized thumbnails are cached across restarts. Press Refresh to reconnect; a failed connection retains the cached library and is shown separately from an empty card. Thumbnails are shown before optional rotation metadata. Browsing never probes or downloads original files. Rotation uses embedded thumbnail EXIF or small camera metadata, and normalized thumbnails are cached on disk. If the camera omits both, opening the photo loads its original on demand and updates the cached thumbnail with the correctly rendered image.
 
@@ -59,9 +59,9 @@ The handoff file is removed 60 seconds after the last reader closes it, provided
 
 ## Video playback
 
-Tap Play video. The timeline supports seeking and shows elapsed/total time once Android's player is prepared. Original bytes go through the selected camera route and account handling. Validated HTTP byte ranges allow seeking without downloading the whole movie. If the camera ignores Range, the app uses a temporary sequential disk buffer; MP4 layout can require buffering much or all of the file before playback starts. Enough local storage is required for this fallback. Temporary video buffers are removed when the player closes or at the next process start after an interruption.
+Tap Play video. The timeline supports seeking and shows elapsed/total time once Android's player is prepared. Original bytes use the selected camera route and account handling. Live playback requires a successful one-byte range probe; subsequent reads use a bounded 2 MiB block cache. The app never silently downloads an entire movie for playback. If the camera ignores ranges, a request fails, or playback stalls, it cancels that stream and offers Download & play. This explicitly saves the original to your chosen download folder with the normal transfer progress and notification, then plays the saved document locally. Saved videos also play without a camera connection. If Android cannot decode the saved recording, Open with player shares that saved file with a player of your choice.
 
-Playback depends on the camera's HTTP behavior and the phone's codecs. High bitrate, 4K and 10-bit recordings may buffer or be unsupported. Save still copies the original without transcoding. Playback stops when leaving the app. A new stream cannot start while a transfer is running.
+Playback depends on the camera's HTTP behavior and the phone's codecs. High bitrate, 4K and 10-bit recordings may buffer or be unsupported. Save still copies the original without transcoding. Playback stops and releases camera requests on error, completion, leaving the viewer, backgrounding and refresh. Startup is limited to 8 MiB of requested ranges before the first frame and a 12-second progress deadline; individual reads use short socket timeouts. Native player release runs outside the UI thread. A new camera stream cannot start while a transfer is running.
 
 ## Build and verify
 
@@ -76,6 +76,6 @@ bash check-media.sh
 
 The source includes the built arm64 library. To rebuild it, download the official Android NDK r27d, set `CAMERA_NDK_TOOLCHAIN` to its `toolchains/llvm/prebuilt/linux-x86_64` directory, and run `python3 native/build-native.py`. The build uses the source list from LibRaw's Makefile.am and 16 KiB ELF alignment. LibRaw is pinned to commit `a9a14b1970d188c25dade81f8326ff00a6e33649`, distributed under its CDDL option. Exact source, copyright notices and license are included in the source archive; the app's About dialog exposes the license. Release is non-debuggable and signed with the original local development certificate, not a Play Store distribution key.
 
-`python3 native/check-raw.py` downloads the public-domain EOS R50 V test CR3 from raw.pixls.us, verifies its published SHA-256, and exercises the same full-resolution LibRaw settings on the host. Android workflow tests render actual native Android views with Robolectric, load full-resolution JPEG from a local test camera, exercise ratings and saved marks, and check document-provider transfers and Lightroom staging. These are simulated Android tests, not a test of Lightroom installed on the physical phone or the phone's video codecs. See VERIFICATION.md for the completed checks.
+`python3 native/check-raw.py` downloads the public-domain EOS R50 V test CR3 from raw.pixls.us, verifies its published SHA-256, and exercises the same full-resolution LibRaw settings on the host. Android workflow tests render actual native Android views with Robolectric, load full-resolution JPEG from a local test camera, exercise ratings and saved marks, and check document-provider transfers and Lightroom staging. These are simulated Android tests, not a test of Lightroom installed on the physical phone or the phone's video codecs. See docs/verification.md for the completed checks.
 
 Scope remains images and recorded videos. No capture, camera control, camera deletion, cloud account or upload features are included.
